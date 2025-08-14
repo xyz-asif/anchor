@@ -88,7 +88,7 @@ func (r *Repository) Update(ctx context.Context, id string, update bson.M) error
 
 	result, err := r.collection.UpdateOne(
 		ctx,
-		bson.M{"_id": objectID, "userId": userID},
+		bson.M{"_id": objectID},
 		bson.M{"$set": update},
 	)
 
@@ -97,21 +97,20 @@ func (r *Repository) Update(ctx context.Context, id string, update bson.M) error
 	}
 
 	if result.MatchedCount == 0 {
-		return errors.New("Todo not found")
+		return errors.New("User not found")
 	}
 
 	return nil
 }
 
-func (r *Repository) Delete(ctx context.Context, id, userID string) error {
+func (r *Repository) Delete(ctx context.Context, id string) error {
 	objectID, err := primitive.ObjectIDFromHex(id)
 	if err != nil {
-		return errors.New("Invalid todo ID")
+		return errors.New("Invalid user ID")
 	}
 
 	result, err := r.collection.DeleteOne(ctx, bson.M{
-		"_id":    objectID,
-		"userId": userID,
+		"_id": objectID,
 	})
 
 	if err != nil {
@@ -119,42 +118,37 @@ func (r *Repository) Delete(ctx context.Context, id, userID string) error {
 	}
 
 	if result.DeletedCount == 0 {
-		return errors.New("Todo not found")
+		return errors.New("User not found")
 	}
 
 	return nil
 }
 
-func (r *Repository) List(ctx context.Context, userID string, completed *bool, limit int) ([]Todo, error) {
-	filter := bson.M{"userId": userID}
-	if completed != nil {
-		filter["completed"] = *completed
-	}
-
+func (r *Repository) List(ctx context.Context, limit int) ([]User, error) {
 	opts := options.Find()
 	opts.SetSort(bson.D{{Key: "createdAt", Value: -1}})
 	if limit > 0 {
 		opts.SetLimit(int64(limit))
 	}
 
-	cursor, err := r.collection.Find(ctx, filter, opts)
+	cursor, err := r.collection.Find(ctx, bson.M{}, opts)
 	if err != nil {
 		return nil, err
 	}
 	defer cursor.Close(ctx)
 
-	var todos []Todo
-	if err := cursor.All(ctx, &todos); err != nil {
+	var users []User
+	if err := cursor.All(ctx, &users); err != nil {
 		return nil, err
 	}
 
-	if todos == nil {
-		todos = []Todo{}
+	if users == nil {
+		users = []User{}
 	}
 
-	return todos, nil
+	return users, nil
 }
 
-func (r *Repository) CountByUser(ctx context.Context, userID string) (int64, error) {
-	return r.collection.CountDocuments(ctx, bson.M{"userId": userID})
+func (r *Repository) Count(ctx context.Context) (int64, error) {
+	return r.collection.CountDocuments(ctx, bson.M{})
 }

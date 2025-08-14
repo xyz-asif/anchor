@@ -2,21 +2,45 @@
 package middleware
 
 import (
-	"github.com/gin-gonic/gin"
+    "strings"
+
+    "github.com/gin-gonic/gin"
 )
 
 func CORS(allowedOrigin string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
-		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+    return func(c *gin.Context) {
+        origin := c.Request.Header.Get("Origin")
 
-		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(204)
-			return
-		}
+        // Decide which origin to allow
+        allowOrigin := ""
+        if allowedOrigin == "*" && origin != "" {
+            // With credentials, wildcard is not allowed. Echo the request origin.
+            allowOrigin = origin
+        } else if origin == allowedOrigin {
+            allowOrigin = origin
+        }
 
-		c.Next()
-	}
+        if allowOrigin != "" {
+            c.Header("Access-Control-Allow-Origin", allowOrigin)
+        }
+
+        // Always vary on origin and requested headers/method
+        c.Header("Vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers")
+        c.Header("Access-Control-Allow-Credentials", "true")
+        c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+
+        // Reflect requested headers if present, otherwise set a sane default
+        reqHeaders := c.Request.Header.Get("Access-Control-Request-Headers")
+        if strings.TrimSpace(reqHeaders) == "" {
+            reqHeaders = "Content-Type, Authorization"
+        }
+        c.Header("Access-Control-Allow-Headers", reqHeaders)
+
+        if c.Request.Method == "OPTIONS" {
+            c.AbortWithStatus(204)
+            return
+        }
+
+        c.Next()
+    }
 }

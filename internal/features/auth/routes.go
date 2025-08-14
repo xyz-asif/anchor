@@ -2,7 +2,7 @@
 package auth
 
 import (
-	"gotodo/internal/middleware"
+	"github.com/xyz-asif/gotodo/internal/middleware"
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/mongo"

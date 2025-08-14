@@ -1,4 +1,3 @@
-/ ================== internal/config/config.go ==================
 package config
 
 import (
@@ -9,13 +8,13 @@ import (
 )
 
 type Config struct {
-	Port         string
-	AppEnv       string
-	MongoURI     string
-	MongoDB      string
-	JWTSecret    string
-	JWTExpire    string
-	FrontendURL  string
+	Port        string
+	AppEnv      string
+	MongoURI    string
+	MongoDB     string
+	JWTSecret   string
+	JWTExpire   string
+	FrontendURL string
 }
 
 func Load() *Config {
@@ -25,13 +24,13 @@ func Load() *Config {
 	}
 
 	return &Config{
-		Port:         getEnv("PORT", "8080"),
-		AppEnv:       getEnv("APP_ENV", "development"),
-		MongoURI:     getEnv("MONGO_URI", "mongodb://localhost:27017"),
-		MongoDB:      getEnv("MONGO_DB", "gotodo"),
-		JWTSecret:    getEnv("JWT_SECRET", "secret"),
-		JWTExpire:    getEnv("JWT_EXPIRE_HOURS", "24"),
-		FrontendURL:  getEnv("FRONTEND_URL", "http://localhost:3000"),
+		Port:        getEnv("PORT", "8080"),
+		AppEnv:      getEnv("APP_ENV", "development"),
+		MongoURI:    getEnv("MONGO_URI", "mongodb://localhost:27017"),
+		MongoDB:     getEnv("MONGO_DB", "gotodo"),
+		JWTSecret:   getEnv("JWT_SECRET", "secret"),
+		JWTExpire:   getEnv("JWT_EXPIRE_HOURS", "24"),
+		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:3000"),
 	}
 }
 

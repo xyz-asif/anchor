@@ -1,9 +1,13 @@
 // ================== internal/features/auth/handler.go ==================
 package auth
 
+// Swagger API metadata is defined globally in cmd/api/main.go
+
 import (
-	"gotodo/internal/config"
 	"net/http"
+
+	"github.com/xyz-asif/gotodo/internal/config"
+	"github.com/xyz-asif/gotodo/internal/pkg/token"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
@@ -21,6 +25,17 @@ func NewHandler(repo *Repository) *Handler {
 	}
 }
 
+// Register godoc
+// @Summary Register a new user
+// @Description Register a new user with email, password, and name
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param request body RegisterRequest true "User registration data"
+// @Success 201 {object} AuthResponse
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /auth/register [post]
 func (h *Handler) Register(c *gin.Context) {
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -64,7 +79,7 @@ func (h *Handler) Register(c *gin.Context) {
 	}
 
 	// Generate token
-	token, err := GenerateToken(user.ID.Hex(), user.Email)
+	token, err := token.GenerateToken(user.ID.Hex(), user.Email)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
 		return
@@ -76,6 +91,18 @@ func (h *Handler) Register(c *gin.Context) {
 	})
 }
 
+// Login godoc
+// @Summary Login user
+// @Description Authenticate user with email and password
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param request body LoginRequest true "User login credentials"
+// @Success 200 {object} AuthResponse
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /auth/login [post]
 func (h *Handler) Login(c *gin.Context) {
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -106,7 +133,7 @@ func (h *Handler) Login(c *gin.Context) {
 	}
 
 	// Generate token
-	token, err := GenerateToken(user.ID.Hex(), user.Email)
+	token, err := token.GenerateToken(user.ID.Hex(), user.Email)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
 		return
@@ -118,6 +145,18 @@ func (h *Handler) Login(c *gin.Context) {
 	})
 }
 
+// Me godoc
+// @Summary Get current user profile
+// @Description Get the profile of the currently authenticated user
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /auth/me [get]
 func (h *Handler) Me(c *gin.Context) {
 	userID := c.GetString("userID")
 

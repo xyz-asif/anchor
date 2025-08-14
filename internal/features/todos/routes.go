@@ -2,7 +2,7 @@
 package todos
 
 import (
-	"gotodo/internal/middleware"
+	"github.com/xyz-asif/gotodo/internal/middleware"
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -21,18 +21,4 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database) {
 		todos.PUT("/:id", handler.Update)
 		todos.DELETE("/:id", handler.Delete)
 	}
-}
-		bson.M{"_id": objectID},
-		bson.M{"$set": update},
-	)
-
-	if err != nil {
-		return err
-	}
-
-	if result.MatchedCount == 0 {
-		return errors.New("User not found")
-	}
-
-	return nil
 }

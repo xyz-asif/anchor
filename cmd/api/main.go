@@ -1,12 +1,19 @@
 // ================== cmd/api/main.go ==================
+//
+// @title GoTodo API
+// @version 1.0
+// @description A RESTful API for managing todos with JWT authentication
+// @host localhost:8080
+// @BasePath /api/v1
+// @schemes http
+// @securityDefinitions.apikey BearerAuth
+// @in header
+// @name Authorization
+// @description Type "Bearer <token>"
 package main
 
 import (
 	"context"
-	"gotodo/internal/config"
-	"gotodo/internal/database"
-	"gotodo/internal/middleware"
-	"gotodo/internal/routes"
 	"log"
 	"net/http"
 	"os"
@@ -14,12 +21,28 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/xyz-asif/gotodo/internal/config"
+	"github.com/xyz-asif/gotodo/internal/database"
+	"github.com/xyz-asif/gotodo/internal/middleware"
+	"github.com/xyz-asif/gotodo/internal/routes"
+
 	"github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
+	docs "github.com/xyz-asif/gotodo/docs"
 )
 
 func main() {
 	// Load config
 	cfg := config.Load()
+
+	// Configure Swagger metadata at runtime
+	docs.SwaggerInfo.Title = "GoTodo API"
+	docs.SwaggerInfo.Description = "A RESTful API for managing todos with JWT authentication"
+	docs.SwaggerInfo.Version = "1.0"
+	docs.SwaggerInfo.Host = "localhost:" + cfg.Port
+	docs.SwaggerInfo.BasePath = "/api/v1"
+	docs.SwaggerInfo.Schemes = []string{"http"}
 
 	// Connect to MongoDB
 	db, err := database.Connect(cfg.MongoURI, cfg.MongoDB)
@@ -45,6 +68,19 @@ func main() {
 			"time":   time.Now().Unix(),
 		})
 	})
+
+	// Swagger documentation (modern UI configs)
+	router.GET(
+		"/swagger/*any",
+		ginSwagger.WrapHandler(
+			swaggerFiles.Handler,
+			ginSwagger.URL("/swagger/doc.json"),
+			ginSwagger.DeepLinking(true),
+			ginSwagger.DefaultModelsExpandDepth(-1),
+			ginSwagger.DocExpansion("none"),
+			ginSwagger.PersistAuthorization(true),
+		),
+	)
 
 	// Register all routes
 	routes.RegisterRoutes(router, db.Database)

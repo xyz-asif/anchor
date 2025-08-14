@@ -15,16 +15,24 @@ type Repository struct {
 	collection *mongo.Collection
 }
 
+func (r *Repository) CountByUser(ctx context.Context, userID string) (int64, error) {
+	count, err := r.collection.CountDocuments(ctx, bson.M{"userId": userID})
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 func NewRepository(db *mongo.Database) *Repository {
 	collection := db.Collection("todos")
-	
+
 	// Create indexes
 	collection.Indexes().CreateMany(context.Background(), []mongo.IndexModel{
 		{Keys: bson.D{{Key: "userId", Value: 1}}},
 		{Keys: bson.D{{Key: "completed", Value: 1}}},
 		{Keys: bson.D{{Key: "createdAt", Value: -1}}},
 	})
-	
+
 	return &Repository{collection: collection}
 }
 

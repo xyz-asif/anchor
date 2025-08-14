@@ -2,8 +2,8 @@
 package routes
 
 import (
-	"gotodo/internal/features/auth"
-	"gotodo/internal/features/todos"
+	"github.com/xyz-asif/gotodo/internal/features/auth"
+	"github.com/xyz-asif/gotodo/internal/features/todos"
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/mongo"
