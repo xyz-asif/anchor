@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/xyz-asif/gotodo/internal/config"
+	"github.com/xyz-asif/gotodo/internal/pkg/response"
 	"github.com/xyz-asif/gotodo/internal/pkg/token"
 
 	"github.com/gin-gonic/gin"
@@ -33,8 +34,8 @@ func NewHandler(repo *Repository) *Handler {
 // @Produce json
 // @Param request body RegisterRequest true "User registration data"
 // @Success 201 {object} AuthResponse
-// @Failure 400 {object} map[string]string
-// @Failure 500 {object} map[string]string
+// @Failure 400 {object} response.ErrorResponse
+// @Failure 500 {object} response.ErrorResponse
 // @Router /auth/register [post]
 func (h *Handler) Register(c *gin.Context) {
 	var req RegisterRequest
@@ -44,7 +45,7 @@ func (h *Handler) Register(c *gin.Context) {
 	}
 
 	if err := ValidateRegister(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.ValidationFailed(c, err.Error())
 		return
 	}
 
@@ -99,19 +100,19 @@ func (h *Handler) Register(c *gin.Context) {
 // @Produce json
 // @Param request body LoginRequest true "User login credentials"
 // @Success 200 {object} AuthResponse
-// @Failure 400 {object} map[string]string
-// @Failure 401 {object} map[string]string
-// @Failure 500 {object} map[string]string
+// @Failure 400 {object} response.ErrorResponse
+// @Failure 401 {object} response.ErrorResponse
+// @Failure 500 {object} response.ErrorResponse
 // @Router /auth/login [post]
 func (h *Handler) Login(c *gin.Context) {
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
+		response.BindJSONError(c, err)
 		return
 	}
 
 	if err := ValidateLogin(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.ValidationFailed(c, err.Error())
 		return
 	}
 
@@ -153,9 +154,9 @@ func (h *Handler) Login(c *gin.Context) {
 // @Produce json
 // @Security BearerAuth
 // @Success 200 {object} map[string]interface{}
-// @Failure 401 {object} map[string]string
-// @Failure 404 {object} map[string]string
-// @Failure 500 {object} map[string]string
+// @Failure 401 {object} response.ErrorResponse
+// @Failure 404 {object} response.ErrorResponse
+// @Failure 500 {object} response.ErrorResponse
 // @Router /auth/me [get]
 func (h *Handler) Me(c *gin.Context) {
 	userID := c.GetString("userID")

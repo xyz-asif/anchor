@@ -26,9 +26,9 @@ func NewHandler(repo *Repository) *Handler {
 // @Security BearerAuth
 // @Param request body CreateTodoRequest true "Todo creation data"
 // @Success 201 {object} map[string]interface{}
-// @Failure 400 {object} map[string]string
-// @Failure 401 {object} map[string]string
-// @Failure 500 {object} map[string]string
+// @Failure 400 {object} response.ErrorResponse
+// @Failure 401 {object} response.ErrorResponse
+// @Failure 500 {object} response.ErrorResponse
 // @Router /todos/ [post]
 func (h *Handler) Create(c *gin.Context) {
 	userID := c.GetString("userID")
@@ -78,9 +78,9 @@ func (h *Handler) Create(c *gin.Context) {
 // @Security BearerAuth
 // @Param id path string true "Todo ID"
 // @Success 200 {object} map[string]interface{}
-// @Failure 400 {object} map[string]string
-// @Failure 401 {object} map[string]string
-// @Failure 404 {object} map[string]string
+// @Failure 400 {object} response.ErrorResponse
+// @Failure 401 {object} response.ErrorResponse
+// @Failure 404 {object} response.ErrorResponse
 // @Router /todos/{id} [get]
 func (h *Handler) Get(c *gin.Context) {
 	userID := c.GetString("userID")
@@ -110,9 +110,9 @@ func (h *Handler) Get(c *gin.Context) {
 // @Param id path string true "Todo ID"
 // @Param request body UpdateTodoRequest true "Todo update data"
 // @Success 200 {object} map[string]interface{}
-// @Failure 400 {object} map[string]string
-// @Failure 401 {object} map[string]string
-// @Failure 404 {object} map[string]string
+// @Failure 400 {object} response.ErrorResponse
+// @Failure 401 {object} response.ErrorResponse
+// @Failure 404 {object} response.ErrorResponse
 // @Router /todos/{id} [put]
 func (h *Handler) Update(c *gin.Context) {
 	userID := c.GetString("userID")
@@ -183,9 +183,9 @@ func (h *Handler) Update(c *gin.Context) {
 // @Security BearerAuth
 // @Param id path string true "Todo ID"
 // @Success 200 {object} map[string]string
-// @Failure 400 {object} map[string]string
-// @Failure 401 {object} map[string]string
-// @Failure 404 {object} map[string]string
+// @Failure 400 {object} response.ErrorResponse
+// @Failure 401 {object} response.ErrorResponse
+// @Failure 404 {object} response.ErrorResponse
 // @Router /todos/{id} [delete]
 func (h *Handler) Delete(c *gin.Context) {
 	userID := c.GetString("userID")
@@ -213,8 +213,8 @@ func (h *Handler) Delete(c *gin.Context) {
 // @Param completed query bool false "Filter by completion status"
 // @Param limit query int false "Maximum number of todos to return (default: 50, max: 100)"
 // @Success 200 {object} map[string]interface{}
-// @Failure 401 {object} map[string]string
-// @Failure 500 {object} map[string]string
+// @Failure 401 {object} response.ErrorResponse
+// @Failure 500 {object} response.ErrorResponse
 // @Router /todos/ [get]
 func (h *Handler) List(c *gin.Context) {
 	userID := c.GetString("userID")
