@@ -50,7 +50,7 @@ func main() {
 		log.Fatal("Failed to connect to MongoDB:", err)
 	}
 	defer db.Disconnect(context.Background())
-
+	//If we are running in production, be quiet and stop logging so much.
 	// Setup Gin
 	if cfg.AppEnv == "production" {
 		gin.SetMode(gin.ReleaseMode)
@@ -85,14 +85,15 @@ func main() {
 	// Register all routes
 	routes.RegisterRoutes(router, db.Database)
 
-	// Start server
+	// config server
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,
 		Handler: router,
 	}
-
+	// start the server
 	go func() {
 		log.Printf("Server starting on port %s", cfg.Port)
+
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal("Failed to start server:", err)
 		}
@@ -105,6 +106,7 @@ func main() {
 
 	log.Println("Shutting down server...")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// if it takes less than 5 sec clear all the things so that we dont use or holding onto resources unnecessarily.
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {

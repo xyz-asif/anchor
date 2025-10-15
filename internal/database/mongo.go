@@ -15,15 +15,15 @@ type MongoDB struct {
 }
 
 func Connect(uri, dbName string) (*MongoDB, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second) // you are telling yourself that you will start the func and wait till 10 sec for the db to answer you back
+	defer cancel()                                                           // this is basically using the above cancel func and calling it at the end of this func using defer
 
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
 	if err != nil {
 		return nil, err
 	}
 
-	// Ping to verify connection
+	// Ping to verify connection that been made above code
 	if err := client.Ping(ctx, nil); err != nil {
 		return nil, err
 	}
