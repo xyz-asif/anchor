@@ -24,6 +24,7 @@ import (
 	"github.com/xyz-asif/gotodo/internal/config"
 	"github.com/xyz-asif/gotodo/internal/database"
 	"github.com/xyz-asif/gotodo/internal/middleware"
+	"github.com/xyz-asif/gotodo/internal/pkg/response"
 	"github.com/xyz-asif/gotodo/internal/routes"
 
 	"github.com/gin-gonic/gin"
@@ -63,7 +64,7 @@ func main() {
 
 	// Health check
 	router.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{
+		response.Success(c, map[string]interface{}{
 			"status": "ok",
 			"time":   time.Now().Unix(),
 		})

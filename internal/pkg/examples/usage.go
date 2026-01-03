@@ -107,6 +107,14 @@ func ExampleUsage() {
 
 	// ================== RESPONSE USAGE ==================
 	// This would be used in HTTP handlers
+	// All endpoints now return a unified envelope:
+	// {
+	//   "success": true|false,
+	//   "statusCode": 200,
+	//   "message": "...",
+	//   "data": {...} | null,
+	//   "code": "OPTIONAL_ERROR_CODE"
+	// }
 	// c is gin.Context
 
 	// Success responses

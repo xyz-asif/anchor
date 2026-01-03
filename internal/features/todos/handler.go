@@ -2,11 +2,12 @@
 package todos
 
 import (
-	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson"
+
+	"github.com/xyz-asif/gotodo/internal/pkg/response"
 )
 
 type Handler struct {
@@ -26,21 +27,21 @@ func NewHandler(repo *Repository) *Handler {
 // @Security BearerAuth
 // @Param request body CreateTodoRequest true "Todo creation data"
 // @Success 201 {object} map[string]interface{}
-// @Failure 400 {object} response.ErrorResponse
-// @Failure 401 {object} response.ErrorResponse
-// @Failure 500 {object} response.ErrorResponse
+// @Failure 400 {object} response.APIResponse
+// @Failure 401 {object} response.APIResponse
+// @Failure 500 {object} response.APIResponse
 // @Router /todos/ [post]
 func (h *Handler) Create(c *gin.Context) {
 	userID := c.GetString("userID")
 
 	var req CreateTodoRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
+		response.BindJSONError(c, err)
 		return
 	}
 
 	if err := ValidateCreateTodo(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.ValidationFailed(c, err.Error())
 		return
 	}
 
@@ -62,11 +63,11 @@ func (h *Handler) Create(c *gin.Context) {
 	}
 
 	if err := h.repo.Create(c.Request.Context(), todo); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create todo"})
+		response.DatabaseError(c, "Failed to create todo")
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{"todo": todo})
+	response.Created(c, todo)
 }
 
 // Get godoc
@@ -78,9 +79,9 @@ func (h *Handler) Create(c *gin.Context) {
 // @Security BearerAuth
 // @Param id path string true "Todo ID"
 // @Success 200 {object} map[string]interface{}
-// @Failure 400 {object} response.ErrorResponse
-// @Failure 401 {object} response.ErrorResponse
-// @Failure 404 {object} response.ErrorResponse
+// @Failure 400 {object} response.APIResponse
+// @Failure 401 {object} response.APIResponse
+// @Failure 404 {object} response.APIResponse
 // @Router /todos/{id} [get]
 func (h *Handler) Get(c *gin.Context) {
 	userID := c.GetString("userID")
@@ -88,16 +89,16 @@ func (h *Handler) Get(c *gin.Context) {
 
 	todo, err := h.repo.GetByID(c.Request.Context(), todoID, userID)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": TranslateTodoError(err)})
+		response.BadRequest(c, TranslateTodoError(err))
 		return
 	}
 
 	if todo == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Todo not found"})
+		response.NotFound(c, "Todo not found")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"todo": todo})
+	response.Success(c, todo)
 }
 
 // Update godoc
@@ -110,9 +111,9 @@ func (h *Handler) Get(c *gin.Context) {
 // @Param id path string true "Todo ID"
 // @Param request body UpdateTodoRequest true "Todo update data"
 // @Success 200 {object} map[string]interface{}
-// @Failure 400 {object} response.ErrorResponse
-// @Failure 401 {object} response.ErrorResponse
-// @Failure 404 {object} response.ErrorResponse
+// @Failure 400 {object} response.APIResponse
+// @Failure 401 {object} response.APIResponse
+// @Failure 404 {object} response.APIResponse
 // @Router /todos/{id} [put]
 func (h *Handler) Update(c *gin.Context) {
 	userID := c.GetString("userID")
@@ -120,12 +121,12 @@ func (h *Handler) Update(c *gin.Context) {
 
 	var req UpdateTodoRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
+		response.BindJSONError(c, err)
 		return
 	}
 
 	if err := ValidateUpdateTodo(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.ValidationFailed(c, err.Error())
 		return
 	}
 
@@ -151,27 +152,27 @@ func (h *Handler) Update(c *gin.Context) {
 	}
 
 	if len(update) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "No fields to update"})
+		response.BadRequest(c, "No fields to update")
 		return
 	}
 
 	if err := h.repo.Update(c.Request.Context(), todoID, userID, update); err != nil {
 		if err.Error() == "Todo not found" {
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			response.NotFound(c, err.Error())
 			return
 		}
-		c.JSON(http.StatusBadRequest, gin.H{"error": TranslateTodoError(err)})
+		response.BadRequest(c, TranslateTodoError(err))
 		return
 	}
 
 	// Get updated todo
 	todo, err := h.repo.GetByID(c.Request.Context(), todoID, userID)
 	if err != nil || todo == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve updated todo"})
+		response.InternalServerError(c, "Failed to retrieve updated todo")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"todo": todo})
+	response.Success(c, todo)
 }
 
 // Delete godoc
@@ -183,9 +184,9 @@ func (h *Handler) Update(c *gin.Context) {
 // @Security BearerAuth
 // @Param id path string true "Todo ID"
 // @Success 200 {object} map[string]string
-// @Failure 400 {object} response.ErrorResponse
-// @Failure 401 {object} response.ErrorResponse
-// @Failure 404 {object} response.ErrorResponse
+// @Failure 400 {object} response.APIResponse
+// @Failure 401 {object} response.APIResponse
+// @Failure 404 {object} response.APIResponse
 // @Router /todos/{id} [delete]
 func (h *Handler) Delete(c *gin.Context) {
 	userID := c.GetString("userID")
@@ -193,14 +194,14 @@ func (h *Handler) Delete(c *gin.Context) {
 
 	if err := h.repo.Delete(c.Request.Context(), todoID, userID); err != nil {
 		if err.Error() == "Todo not found" {
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			response.NotFound(c, err.Error())
 			return
 		}
-		c.JSON(http.StatusBadRequest, gin.H{"error": TranslateTodoError(err)})
+		response.BadRequest(c, TranslateTodoError(err))
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Todo deleted successfully"})
+	response.Success(c, map[string]string{"message": "Todo deleted successfully"})
 }
 
 // List godoc
@@ -213,8 +214,8 @@ func (h *Handler) Delete(c *gin.Context) {
 // @Param completed query bool false "Filter by completion status"
 // @Param limit query int false "Maximum number of todos to return (default: 50, max: 100)"
 // @Success 200 {object} map[string]interface{}
-// @Failure 401 {object} response.ErrorResponse
-// @Failure 500 {object} response.ErrorResponse
+// @Failure 401 {object} response.APIResponse
+// @Failure 500 {object} response.APIResponse
 // @Router /todos/ [get]
 func (h *Handler) List(c *gin.Context) {
 	userID := c.GetString("userID")
@@ -240,20 +241,17 @@ func (h *Handler) List(c *gin.Context) {
 
 	todos, err := h.repo.List(c.Request.Context(), userID, completed, limit)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get todos"})
+		response.InternalServerError(c, "Failed to get todos")
 		return
 	}
 
 	// Get total count
 	total, err := h.repo.CountByUser(c.Request.Context(), userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to count todos"})
+		response.InternalServerError(c, "Failed to count todos")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"todos": todos,
-		"total": total,
-		"limit": limit,
-	})
+	// Use paginated response helper
+	response.Paginated(c, todos, total, limit)
 }

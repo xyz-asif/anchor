@@ -2,9 +2,9 @@
 package middleware
 
 import (
-	"net/http"
 	"strings"
 
+	"github.com/xyz-asif/gotodo/internal/pkg/response"
 	"github.com/xyz-asif/gotodo/internal/pkg/token"
 
 	"github.com/gin-gonic/gin"
@@ -14,7 +14,7 @@ func Auth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header required"})
+			response.Unauthorized(c, "Authorization header required")
 			c.Abort()
 			return
 		}
@@ -31,7 +31,7 @@ func Auth() gin.HandlerFunc {
 
 		claims, err := token.ValidateToken(tokenString)
 		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
+			response.Unauthorized(c, "Invalid token")
 			c.Abort()
 			return
 		}

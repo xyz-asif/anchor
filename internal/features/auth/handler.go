@@ -4,8 +4,6 @@ package auth
 // Swagger API metadata is defined globally in cmd/api/main.go
 
 import (
-	"net/http"
-
 	"github.com/xyz-asif/gotodo/internal/config"
 	"github.com/xyz-asif/gotodo/internal/pkg/response"
 	"github.com/xyz-asif/gotodo/internal/pkg/token"
@@ -34,13 +32,13 @@ func NewHandler(repo *Repository) *Handler {
 // @Produce json
 // @Param request body RegisterRequest true "User registration data"
 // @Success 201 {object} AuthResponse
-// @Failure 400 {object} response.ErrorResponse
-// @Failure 500 {object} response.ErrorResponse
+// @Failure 400 {object} response.APIResponse
+// @Failure 500 {object} response.APIResponse
 // @Router /auth/register [post]
 func (h *Handler) Register(c *gin.Context) {
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
+		response.BindJSONError(c, err)
 		return
 	}
 
@@ -52,18 +50,18 @@ func (h *Handler) Register(c *gin.Context) {
 	// Check if user exists
 	existing, err := h.repo.FindByEmail(c.Request.Context(), req.Email)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": TranslateAuthError(err)})
+		response.InternalServerError(c, TranslateAuthError(err))
 		return
 	}
 	if existing != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Email already registered"})
+		response.BadRequest(c, "Email already registered")
 		return
 	}
 
 	// Hash password
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process password"})
+		response.InternalServerError(c, "Failed to process password")
 		return
 	}
 
@@ -75,18 +73,18 @@ func (h *Handler) Register(c *gin.Context) {
 	}
 
 	if err := h.repo.Create(c.Request.Context(), user); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": TranslateAuthError(err)})
+		response.DatabaseError(c, TranslateAuthError(err))
 		return
 	}
 
 	// Generate token
 	token, err := token.GenerateToken(user.ID.Hex(), user.Email)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
+		response.InternalServerError(c, "Failed to generate token")
 		return
 	}
 
-	c.JSON(http.StatusCreated, AuthResponse{
+	response.Created(c, AuthResponse{
 		Token: token,
 		User:  user,
 	})
@@ -100,9 +98,9 @@ func (h *Handler) Register(c *gin.Context) {
 // @Produce json
 // @Param request body LoginRequest true "User login credentials"
 // @Success 200 {object} AuthResponse
-// @Failure 400 {object} response.ErrorResponse
-// @Failure 401 {object} response.ErrorResponse
-// @Failure 500 {object} response.ErrorResponse
+// @Failure 400 {object} response.APIResponse
+// @Failure 401 {object} response.APIResponse
+// @Failure 500 {object} response.APIResponse
 // @Router /auth/login [post]
 func (h *Handler) Login(c *gin.Context) {
 	var req LoginRequest
@@ -119,28 +117,28 @@ func (h *Handler) Login(c *gin.Context) {
 	// Find user
 	user, err := h.repo.FindByEmail(c.Request.Context(), req.Email)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": TranslateAuthError(err)})
+		response.InternalServerError(c, TranslateAuthError(err))
 		return
 	}
 	if user == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid email or password"})
+		response.Unauthorized(c, "Invalid email or password")
 		return
 	}
 
 	// Check password
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid email or password"})
+		response.Unauthorized(c, "Invalid email or password")
 		return
 	}
 
 	// Generate token
 	token, err := token.GenerateToken(user.ID.Hex(), user.Email)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
+		response.InternalServerError(c, "Failed to generate token")
 		return
 	}
 
-	c.JSON(http.StatusOK, AuthResponse{
+	response.Success(c, AuthResponse{
 		Token: token,
 		User:  user,
 	})
@@ -154,22 +152,22 @@ func (h *Handler) Login(c *gin.Context) {
 // @Produce json
 // @Security BearerAuth
 // @Success 200 {object} map[string]interface{}
-// @Failure 401 {object} response.ErrorResponse
-// @Failure 404 {object} response.ErrorResponse
-// @Failure 500 {object} response.ErrorResponse
+// @Failure 401 {object} response.APIResponse
+// @Failure 404 {object} response.APIResponse
+// @Failure 500 {object} response.APIResponse
 // @Router /auth/me [get]
 func (h *Handler) Me(c *gin.Context) {
 	userID := c.GetString("userID")
 
 	user, err := h.repo.FindByID(c.Request.Context(), userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": TranslateAuthError(err)})
+		response.InternalServerError(c, TranslateAuthError(err))
 		return
 	}
 	if user == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		response.NotFound(c, "User not found")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"user": user})
+	response.Success(c, user)
 }

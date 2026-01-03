@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xyz-asif/gotodo/internal/pkg/response"
 )
 
 // Middleware creates a rate limiting middleware for Gin
@@ -22,13 +23,12 @@ func Middleware(limiter *RateLimiter) gin.HandlerFunc {
 			c.Header("X-RateLimit-Reset", resetTime.Format(time.RFC3339))
 			c.Header("Retry-After", "60")
 
-			c.JSON(http.StatusTooManyRequests, gin.H{
-				"error":       "Rate limit exceeded. Try again later.",
+			response.Respond(c, http.StatusTooManyRequests, false, "Rate limit exceeded. Try again later.", map[string]interface{}{
 				"retry_after": "60s",
 				"reset_time":  resetTime.Format(time.RFC3339),
 				"limit":       100,
 				"remaining":   remaining,
-			})
+			}, "RATE_LIMIT_EXCEEDED")
 			c.Abort()
 			return
 		}
@@ -64,13 +64,12 @@ func UserBasedMiddleware(limiter *RateLimiter) gin.HandlerFunc {
 			c.Header("X-RateLimit-Reset", resetTime.Format(time.RFC3339))
 			c.Header("Retry-After", "60")
 
-			c.JSON(http.StatusTooManyRequests, gin.H{
-				"error":       "Rate limit exceeded. Try again later.",
+			response.Respond(c, http.StatusTooManyRequests, false, "Rate limit exceeded. Try again later.", map[string]interface{}{
 				"retry_after": "60s",
 				"reset_time":  resetTime.Format(time.RFC3339),
 				"limit":       100,
 				"remaining":   remaining,
-			})
+			}, "RATE_LIMIT_EXCEEDED")
 			c.Abort()
 			return
 		}
@@ -104,13 +103,12 @@ func CustomKeyMiddleware(limiter *RateLimiter, keyFunc func(c *gin.Context) stri
 			c.Header("X-RateLimit-Reset", resetTime.Format(time.RFC3339))
 			c.Header("Retry-After", "60")
 
-			c.JSON(http.StatusTooManyRequests, gin.H{
-				"error":       "Rate limit exceeded. Try again later.",
+			response.Respond(c, http.StatusTooManyRequests, false, "Rate limit exceeded. Try again later.", map[string]interface{}{
 				"retry_after": "60s",
 				"reset_time":  resetTime.Format(time.RFC3339),
 				"limit":       100,
 				"remaining":   remaining,
-			})
+			}, "RATE_LIMIT_EXCEEDED")
 			c.Abort()
 			return
 		}
@@ -164,13 +162,12 @@ func DifferentLimitsMiddleware(limiters map[string]*RateLimiter) gin.HandlerFunc
 			c.Header("X-RateLimit-Reset", resetTime.Format(time.RFC3339))
 			c.Header("Retry-After", "60")
 
-			c.JSON(http.StatusTooManyRequests, gin.H{
-				"error":       "Rate limit exceeded. Try again later.",
+			response.Respond(c, http.StatusTooManyRequests, false, "Rate limit exceeded. Try again later.", map[string]interface{}{
 				"retry_after": "60s",
 				"reset_time":  resetTime.Format(time.RFC3339),
 				"limit":       100,
 				"remaining":   remaining,
-			})
+			}, "RATE_LIMIT_EXCEEDED")
 			c.Abort()
 			return
 		}

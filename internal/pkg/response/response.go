@@ -6,70 +6,83 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// ErrorResponse represents a standard error payload returned by the API
-type ErrorResponse struct {
-	Error string `json:"error" example:"Invalid token"`
-	Code  string `json:"code,omitempty" example:"AUTH_INVALID_TOKEN"`
+// APIResponse is the unified response envelope used across the API
+type APIResponse struct {
+	Success    bool        `json:"success" example:"true"`
+	StatusCode int         `json:"statusCode" example:"200"`
+	Message    string      `json:"message,omitempty" example:"OK"`
+	Data       interface{} `json:"data,omitempty"`
+	Code       string      `json:"code,omitempty" example:"AUTH_INVALID_TOKEN"`
 }
 
-// SuccessResponse represents a standard success payload
-type SuccessResponse struct {
-	Status string      `json:"status" example:"success"`
-	Data   interface{} `json:"data"`
+// paginatedData holds the paginated items and metadata
+type paginatedData struct {
+	Items interface{} `json:"items"`
+	Total int64       `json:"total" example:"25"`
+	Limit int         `json:"limit" example:"10"`
+	Page  int         `json:"page,omitempty" example:"1"`
 }
 
-// PaginatedResponse represents a paginated list response
-type PaginatedResponse struct {
-	Status string      `json:"status" example:"success"`
-	Data   interface{} `json:"data"`
-	Total  int64       `json:"total" example:"25"`
-	Limit  int         `json:"limit" example:"10"`
-	Page   int         `json:"page,omitempty" example:"1"`
-}
-
-// Success sends a 200 OK response with data
-func Success(c *gin.Context, data interface{}) {
-	c.JSON(http.StatusOK, SuccessResponse{
-		Status: "success",
-		Data:   data,
+// Respond sends a JSON response using the unified envelope
+func Respond(c *gin.Context, statusCode int, success bool, message string, data interface{}, code ...string) {
+	c.JSON(statusCode, APIResponse{
+		Success:    success,
+		StatusCode: statusCode,
+		Message:    message,
+		Data:       data,
+		Code: func() string {
+			if len(code) > 0 {
+				return code[0]
+			}
+			return ""
+		}(),
 	})
+}
+
+// Success sends a 200 OK response with the unified envelope
+func Success(c *gin.Context, data interface{}, message ...string) {
+	msg := "success"
+	if len(message) > 0 && message[0] != "" {
+		msg = message[0]
+	}
+	Respond(c, http.StatusOK, true, msg, data)
 }
 
 // Created sends a 201 Created response
-func Created(c *gin.Context, data interface{}) {
-	c.JSON(http.StatusCreated, SuccessResponse{
-		Status: "success",
-		Data:   data,
-	})
+func Created(c *gin.Context, data interface{}, message ...string) {
+	msg := "created"
+	if len(message) > 0 && message[0] != "" {
+		msg = message[0]
+	}
+	Respond(c, http.StatusCreated, true, msg, data)
 }
 
-// Paginated sends a paginated response
-func Paginated(c *gin.Context, data interface{}, total int64, limit int, page ...int) {
+// Paginated sends a paginated response using the unified envelope
+func Paginated(c *gin.Context, items interface{}, total int64, limit int, page ...int) {
 	pageNum := 1
 	if len(page) > 0 {
 		pageNum = page[0]
 	}
 
-	c.JSON(http.StatusOK, PaginatedResponse{
-		Status: "success",
-		Data:   data,
-		Total:  total,
-		Limit:  limit,
-		Page:   pageNum,
-	})
+	pd := paginatedData{
+		Items: items,
+		Total: total,
+		Limit: limit,
+		Page:  pageNum,
+	}
+
+	Success(c, pd, "success")
 }
 
 // Error sends an error response with custom status code and message
+// It keeps the same signature as before and supports an optional error code
 func Error(c *gin.Context, statusCode int, message string, errorCode ...string) {
 	code := ""
 	if len(errorCode) > 0 {
 		code = errorCode[0]
 	}
 
-	c.JSON(statusCode, ErrorResponse{
-		Error: message,
-		Code:  code,
-	})
+	Respond(c, statusCode, false, message, nil, code)
 }
 
 // BadRequest sends a 400 Bad Request error
