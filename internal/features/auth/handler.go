@@ -46,7 +46,7 @@ func (h *Handler) GoogleLogin(c *gin.Context) {
 		return
 	}
 
-	// Verify Google Token /
+	// Verify Google Token //
 	googleUser, err := VerifyGoogleToken(c.Request.Context(), req.GoogleIDToken, h.config.GoogleClientID)
 	if err != nil {
 		fmt.Printf("Token verification failed: %v\n", err) // Simple logging for debugging
