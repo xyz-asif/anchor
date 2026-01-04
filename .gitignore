@@ -1,0 +1,20 @@
+# Open your .gitignore file in a text editor
+nano .gitignore
+
+# Or use VS Code
+code .gitignore
+
+# Or just view it
+cat .gitignore
+```
+
+Then **add these lines** to the file:
+```
+# Compiled binaries
+api
+api.exe
+*.exe
+cmd/api/api
+
+# Secrets (optional - if you don't want to commit secrets)
+internal/config/serviceAccountKey.json
