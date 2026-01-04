@@ -1,4 +1,4 @@
-// ================== pkg/errors/errors.go ==================
+// ================== pkg/errors/errors.go =================
 package errors
 
 import "errors"
