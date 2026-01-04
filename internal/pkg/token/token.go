@@ -3,7 +3,6 @@ package token
 
 import (
 	"errors"
-	"strconv"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -19,7 +18,7 @@ type Claims struct {
 func GenerateToken(userID, email string) (string, error) {
 	cfg := config.Load()
 
-	hours, _ := strconv.Atoi(cfg.JWTExpire)
+	hours := cfg.JWTExpireHours
 	claims := &Claims{
 		UserID: userID,
 		Email:  email,

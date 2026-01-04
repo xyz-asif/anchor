@@ -12,180 +12,21 @@
     "host": "localhost:8080",
     "basePath": "/api/v1",
     "paths": {
-        "/auth/login": {
-            "post": {
-                "description": "Authenticate user with email and password",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "auth"
-                ],
-                "summary": "Login user",
-                "parameters": [
-                    {
-                        "description": "User login credentials",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/auth.LoginRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/auth.AuthResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/response.APIResponse"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/response.APIResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/response.APIResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/auth/me": {
+        "/anchors": {
             "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Get the profile of the currently authenticated user",
-                "consumes": [
-                    "application/json"
-                ],
+                "description": "List anchors for a user",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "auth"
+                    "anchors"
                 ],
-                "summary": "Get current user profile",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/response.APIResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/response.APIResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/response.APIResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/auth/register": {
-            "post": {
-                "description": "Register a new user with email, password, and name",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "auth"
-                ],
-                "summary": "Register a new user",
+                "summary": "List anchors",
                 "parameters": [
                     {
-                        "description": "User registration data",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/auth.RegisterRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "201": {
-                        "description": "Created",
-                        "schema": {
-                            "$ref": "#/definitions/auth.AuthResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/response.APIResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/response.APIResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/todos/": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Get a list of todos for the authenticated user with optional filtering",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "todos"
-                ],
-                "summary": "List todos",
-                "parameters": [
-                    {
-                        "type": "boolean",
-                        "description": "Filter by completion status",
-                        "name": "completed",
-                        "in": "query"
-                    },
-                    {
-                        "type": "integer",
-                        "description": "Maximum number of todos to return (default: 50, max: 100)",
-                        "name": "limit",
+                        "type": "string",
+                        "description": "User ID (defaults to authenticated user)",
+                        "name": "userId",
                         "in": "query"
                     }
                 ],
@@ -193,18 +34,26 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": true
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/anchors.Anchor"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/response.APIResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
+                    "400": {
+                        "description": "Bad Request",
                         "schema": {
                             "$ref": "#/definitions/response.APIResponse"
                         }
@@ -217,7 +66,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Create a new todo for the authenticated user",
+                "description": "Create a new anchor collection",
                 "consumes": [
                     "application/json"
                 ],
@@ -225,17 +74,17 @@
                     "application/json"
                 ],
                 "tags": [
-                    "todos"
+                    "anchors"
                 ],
-                "summary": "Create a new todo",
+                "summary": "Create a new anchor",
                 "parameters": [
                     {
-                        "description": "Todo creation data",
+                        "description": "Anchor details",
                         "name": "request",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/todos.CreateTodoRequest"
+                            "$ref": "#/definitions/anchors.CreateAnchorRequest"
                         }
                     }
                 ],
@@ -243,8 +92,19 @@
                     "201": {
                         "description": "Created",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": true
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/anchors.Anchor"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -255,12 +115,6 @@
                     },
                     "401": {
                         "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/response.APIResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/response.APIResponse"
                         }
@@ -268,28 +122,20 @@
                 }
             }
         },
-        "/todos/{id}": {
+        "/anchors/{id}": {
             "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Get a specific todo by ID for the authenticated user",
-                "consumes": [
-                    "application/json"
-                ],
+                "description": "Get a specific anchor with its items",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "todos"
+                    "anchors"
                 ],
-                "summary": "Get a todo by ID",
+                "summary": "Get anchor by ID",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Todo ID",
+                        "description": "Anchor ID",
                         "name": "id",
                         "in": "path",
                         "required": true
@@ -299,81 +145,23 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": true
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/anchors.AnchorWithItemsResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/response.APIResponse"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/response.APIResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/response.APIResponse"
-                        }
-                    }
-                }
-            },
-            "put": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Update an existing todo for the authenticated user",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "todos"
-                ],
-                "summary": "Update a todo",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Todo ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Todo update data",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/todos.UpdateTodoRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/response.APIResponse"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "$ref": "#/definitions/response.APIResponse"
                         }
@@ -392,21 +180,18 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Delete a todo for the authenticated user",
-                "consumes": [
-                    "application/json"
-                ],
+                "description": "Soft delete an anchor",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "todos"
+                    "anchors"
                 ],
-                "summary": "Delete a todo",
+                "summary": "Delete anchor",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Todo ID",
+                        "description": "Anchor ID",
                         "name": "id",
                         "in": "path",
                         "required": true
@@ -416,10 +201,320 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Update anchor details",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "anchors"
+                ],
+                "summary": "Update anchor",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Anchor ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Update fields",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/anchors.UpdateAnchorRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/anchors.Anchor"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/anchors/{id}/items": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Add a new item (URL or text) to an anchor",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "anchors"
+                ],
+                "summary": "Add item to anchor",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Anchor ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Item details",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/anchors.AddItemRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/anchors.Item"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/anchors/{id}/items/{itemId}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Remove an item from an anchor",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "anchors"
+                ],
+                "summary": "Delete item from anchor",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Anchor ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Item ID",
+                        "name": "itemId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/anchors/{id}/pin": {
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Pin or unpin an anchor",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "anchors"
+                ],
+                "summary": "Toggle pin status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Anchor ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/anchors.Anchor"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/google": {
+            "post": {
+                "description": "Authenticate user using Google ID token",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Login with Google",
+                "parameters": [
+                    {
+                        "description": "Google ID Token",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/auth.GoogleAuthRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/auth.AuthResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -433,9 +528,172 @@
                         "schema": {
                             "$ref": "#/definitions/response.APIResponse"
                         }
+                    }
+                }
+            }
+        },
+        "/auth/me": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Get the authenticated user's profile",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Get current user",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/auth.User"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
                     },
-                    "404": {
-                        "description": "Not Found",
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/profile": {
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Update display name and/or bio",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Update user profile",
+                "parameters": [
+                    {
+                        "description": "Profile updates",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/auth.UpdateProfileRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/auth.User"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/username": {
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Change username (can only be done once)",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Update username",
+                "parameters": [
+                    {
+                        "description": "New username",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/auth.UpdateUsernameRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/auth.User"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
                         "schema": {
                             "$ref": "#/definitions/response.APIResponse"
                         }
@@ -445,85 +703,422 @@
         }
     },
     "definitions": {
-        "auth.AuthResponse": {
-            "description": "Authentication response with token and user data",
+        "anchors.AddItemRequest": {
+            "type": "object",
+            "required": [
+                "type"
+            ],
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "maxLength": 10000
+                },
+                "type": {
+                    "type": "string",
+                    "enum": [
+                        "url",
+                        "image",
+                        "audio",
+                        "file",
+                        "text"
+                    ]
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "anchors.Anchor": {
             "type": "object",
             "properties": {
-                "token": {
+                "cloneCount": {
+                    "type": "integer"
+                },
+                "clonedFromAnchorId": {
+                    "type": "string"
+                },
+                "clonedFromUserId": {
+                    "type": "string"
+                },
+                "commentCount": {
+                    "type": "integer"
+                },
+                "coverMediaType": {
+                    "description": "\"icon\", \"emoji\", \"image\"",
+                    "type": "string"
+                },
+                "coverMediaValue": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "deletedAt": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "isPinned": {
+                    "type": "boolean"
+                },
+                "itemCount": {
+                    "type": "integer"
+                },
+                "lastItemAddedAt": {
+                    "type": "string"
+                },
+                "likeCount": {
+                    "type": "integer"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                },
+                "userId": {
+                    "type": "string"
+                },
+                "viewCount": {
+                    "type": "integer"
+                },
+                "visibility": {
+                    "description": "\"private\", \"unlisted\", \"public\"",
+                    "type": "string"
+                }
+            }
+        },
+        "anchors.AnchorWithItemsResponse": {
+            "type": "object",
+            "properties": {
+                "anchor": {
+                    "$ref": "#/definitions/anchors.Anchor"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/anchors.Item"
+                    }
+                }
+            }
+        },
+        "anchors.AudioData": {
+            "type": "object",
+            "properties": {
+                "cloudinaryUrl": {
+                    "type": "string"
+                },
+                "duration": {
+                    "description": "in seconds",
+                    "type": "integer"
+                },
+                "fileSize": {
+                    "type": "integer"
+                },
+                "publicId": {
+                    "type": "string"
+                }
+            }
+        },
+        "anchors.CreateAnchorRequest": {
+            "type": "object",
+            "required": [
+                "title"
+            ],
+            "properties": {
+                "coverMediaType": {
                     "type": "string",
-                    "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                    "enum": [
+                        "icon",
+                        "emoji",
+                        "image"
+                    ]
+                },
+                "coverMediaValue": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string",
+                    "maxLength": 500
+                },
+                "tags": {
+                    "type": "array",
+                    "maxItems": 5,
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "title": {
+                    "type": "string",
+                    "maxLength": 100,
+                    "minLength": 3
+                },
+                "visibility": {
+                    "type": "string",
+                    "enum": [
+                        "private",
+                        "unlisted",
+                        "public"
+                    ]
+                }
+            }
+        },
+        "anchors.FileData": {
+            "type": "object",
+            "properties": {
+                "cloudinaryUrl": {
+                    "type": "string"
+                },
+                "fileSize": {
+                    "type": "integer"
+                },
+                "fileType": {
+                    "type": "string"
+                },
+                "filename": {
+                    "type": "string"
+                },
+                "publicId": {
+                    "type": "string"
+                }
+            }
+        },
+        "anchors.ImageData": {
+            "type": "object",
+            "properties": {
+                "cloudinaryUrl": {
+                    "type": "string"
+                },
+                "fileSize": {
+                    "type": "integer"
+                },
+                "height": {
+                    "type": "integer"
+                },
+                "publicId": {
+                    "type": "string"
+                },
+                "width": {
+                    "type": "integer"
+                }
+            }
+        },
+        "anchors.Item": {
+            "type": "object",
+            "properties": {
+                "anchorId": {
+                    "type": "string"
+                },
+                "audioData": {
+                    "$ref": "#/definitions/anchors.AudioData"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "fileData": {
+                    "$ref": "#/definitions/anchors.FileData"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "imageData": {
+                    "$ref": "#/definitions/anchors.ImageData"
+                },
+                "position": {
+                    "type": "integer"
+                },
+                "textData": {
+                    "$ref": "#/definitions/anchors.TextData"
+                },
+                "type": {
+                    "description": "\"url\", \"image\", \"audio\", \"file\", \"text\"",
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                },
+                "urlData": {
+                    "$ref": "#/definitions/anchors.URLData"
+                }
+            }
+        },
+        "anchors.TextData": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string"
+                }
+            }
+        },
+        "anchors.URLData": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "favicon": {
+                    "type": "string"
+                },
+                "originalUrl": {
+                    "type": "string"
+                },
+                "thumbnail": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "anchors.UpdateAnchorRequest": {
+            "type": "object",
+            "properties": {
+                "coverMediaType": {
+                    "type": "string",
+                    "enum": [
+                        "icon",
+                        "emoji",
+                        "image"
+                    ]
+                },
+                "coverMediaValue": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string",
+                    "maxLength": 500
+                },
+                "tags": {
+                    "type": "array",
+                    "maxItems": 5,
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "title": {
+                    "type": "string",
+                    "maxLength": 100,
+                    "minLength": 3
+                },
+                "visibility": {
+                    "type": "string",
+                    "enum": [
+                        "private",
+                        "unlisted",
+                        "public"
+                    ]
+                }
+            }
+        },
+        "auth.AuthResponse": {
+            "type": "object",
+            "properties": {
+                "accessToken": {
+                    "type": "string"
                 },
                 "user": {
                     "$ref": "#/definitions/auth.User"
                 }
             }
         },
-        "auth.LoginRequest": {
-            "description": "User login request data",
+        "auth.GoogleAuthRequest": {
             "type": "object",
             "required": [
-                "email",
-                "password"
+                "googleIdToken"
             ],
             "properties": {
-                "email": {
-                    "type": "string",
-                    "example": "user@example.com"
-                },
-                "password": {
-                    "type": "string",
-                    "example": "secret123"
+                "googleIdToken": {
+                    "type": "string"
                 }
             }
         },
-        "auth.RegisterRequest": {
-            "description": "User registration request data",
+        "auth.UpdateProfileRequest": {
+            "type": "object",
+            "properties": {
+                "bio": {
+                    "type": "string",
+                    "maxLength": 160
+                },
+                "displayName": {
+                    "type": "string",
+                    "maxLength": 50,
+                    "minLength": 3
+                }
+            }
+        },
+        "auth.UpdateUsernameRequest": {
             "type": "object",
             "required": [
-                "email",
-                "name",
-                "password"
+                "username"
             ],
             "properties": {
-                "email": {
+                "username": {
                     "type": "string",
-                    "example": "user@example.com"
-                },
-                "name": {
-                    "type": "string",
-                    "minLength": 2,
-                    "example": "John Doe"
-                },
-                "password": {
-                    "type": "string",
-                    "minLength": 6,
-                    "example": "secret123"
+                    "maxLength": 20,
+                    "minLength": 3
                 }
             }
         },
         "auth.User": {
-            "description": "User account information",
             "type": "object",
             "properties": {
+                "anchorCount": {
+                    "type": "integer"
+                },
+                "bio": {
+                    "type": "string"
+                },
                 "createdAt": {
-                    "type": "string",
-                    "example": "2023-01-01T00:00:00Z"
+                    "type": "string"
+                },
+                "displayName": {
+                    "type": "string"
                 },
                 "email": {
-                    "type": "string",
-                    "example": "user@example.com"
+                    "type": "string"
+                },
+                "followerCount": {
+                    "type": "integer"
+                },
+                "followingCount": {
+                    "type": "integer"
+                },
+                "googleId": {
+                    "type": "string"
                 },
                 "id": {
-                    "type": "string",
-                    "example": "507f1f77bcf86cd799439011"
+                    "type": "string"
                 },
-                "name": {
-                    "type": "string",
-                    "example": "John Doe"
+                "isVerified": {
+                    "type": "boolean"
+                },
+                "joinedAt": {
+                    "type": "string"
+                },
+                "profilePictureUrl": {
+                    "type": "string"
                 },
                 "updatedAt": {
-                    "type": "string",
-                    "example": "2023-01-01T00:00:00Z"
+                    "type": "string"
+                },
+                "username": {
+                    "type": "string"
+                },
+                "usernameChanged": {
+                    "type": "boolean"
+                },
+                "usernameChangedAt": {
+                    "type": "string"
                 }
             }
         },
@@ -546,89 +1141,6 @@
                 "success": {
                     "type": "boolean",
                     "example": true
-                }
-            }
-        },
-        "todos.CreateTodoRequest": {
-            "description": "Data required to create a new todo",
-            "type": "object",
-            "required": [
-                "title"
-            ],
-            "properties": {
-                "description": {
-                    "type": "string",
-                    "example": "Get milk, bread, and eggs"
-                },
-                "dueDate": {
-                    "type": "string",
-                    "example": "2023-12-31T23:59:59Z"
-                },
-                "priority": {
-                    "type": "string",
-                    "enum": [
-                        "low",
-                        "medium",
-                        "high"
-                    ],
-                    "example": "medium"
-                },
-                "tags": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    },
-                    "example": [
-                        "groceries",
-                        "home"
-                    ]
-                },
-                "title": {
-                    "type": "string",
-                    "minLength": 3,
-                    "example": "Buy groceries"
-                }
-            }
-        },
-        "todos.UpdateTodoRequest": {
-            "description": "Data for updating an existing todo",
-            "type": "object",
-            "properties": {
-                "completed": {
-                    "type": "boolean",
-                    "example": true
-                },
-                "description": {
-                    "type": "string",
-                    "example": "Get milk, bread, and eggs"
-                },
-                "dueDate": {
-                    "type": "string",
-                    "example": "2023-12-31T23:59:59Z"
-                },
-                "priority": {
-                    "type": "string",
-                    "enum": [
-                        "low",
-                        "medium",
-                        "high"
-                    ],
-                    "example": "high"
-                },
-                "tags": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    },
-                    "example": [
-                        "groceries",
-                        "home",
-                        "urgent"
-                    ]
-                },
-                "title": {
-                    "type": "string",
-                    "example": "Buy groceries"
                 }
             }
         }

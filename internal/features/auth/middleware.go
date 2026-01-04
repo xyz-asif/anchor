@@ -1,17 +1,15 @@
-package middleware
+package auth
 
 import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xyz-asif/gotodo/internal/config"
-	"github.com/xyz-asif/gotodo/internal/features/auth"
-
 	"github.com/xyz-asif/gotodo/internal/pkg/response"
 )
 
 // NewAuthMiddleware creates a Gin middleware for JWT authentication
-func NewAuthMiddleware(repo *auth.Repository, cfg *config.Config) gin.HandlerFunc {
+func NewAuthMiddleware(repo *Repository, cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
@@ -28,7 +26,7 @@ func NewAuthMiddleware(repo *auth.Repository, cfg *config.Config) gin.HandlerFun
 		}
 
 		tokenString := parts[1]
-		userID, err := auth.ValidateJWT(tokenString, cfg)
+		userID, err := ValidateJWT(tokenString, cfg)
 		if err != nil {
 			response.Unauthorized(c, "Invalid or expired token", "INVALID_TOKEN")
 			c.Abort()

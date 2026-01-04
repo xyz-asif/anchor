@@ -46,7 +46,7 @@ func main() {
 	docs.SwaggerInfo.Schemes = []string{"http"}
 
 	// Connect to MongoDB
-	db, err := database.Connect(cfg.MongoURI, cfg.MongoDB)
+	db, err := database.Connect(cfg.MongoURI, cfg.DBName)
 	if err != nil {
 		log.Fatal("Failed to connect to MongoDB:", err)
 	}
@@ -84,7 +84,7 @@ func main() {
 	)
 
 	// Register all routes
-	routes.RegisterRoutes(router, db.Database)
+	routes.SetupRoutes(router, db.Database, cfg)
 
 	// config server
 	srv := &http.Server{

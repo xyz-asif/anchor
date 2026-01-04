@@ -1,63 +1,287 @@
 basePath: /api/v1
 definitions:
-  auth.AuthResponse:
-    description: Authentication response with token and user data
+  anchors.AddItemRequest:
     properties:
-      token:
-        example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+      content:
+        maxLength: 10000
+        type: string
+      type:
+        enum:
+        - url
+        - image
+        - audio
+        - file
+        - text
+        type: string
+      url:
+        type: string
+    required:
+    - type
+    type: object
+  anchors.Anchor:
+    properties:
+      cloneCount:
+        type: integer
+      clonedFromAnchorId:
+        type: string
+      clonedFromUserId:
+        type: string
+      commentCount:
+        type: integer
+      coverMediaType:
+        description: '"icon", "emoji", "image"'
+        type: string
+      coverMediaValue:
+        type: string
+      createdAt:
+        type: string
+      deletedAt:
+        type: string
+      description:
+        type: string
+      id:
+        type: string
+      isPinned:
+        type: boolean
+      itemCount:
+        type: integer
+      lastItemAddedAt:
+        type: string
+      likeCount:
+        type: integer
+      tags:
+        items:
+          type: string
+        type: array
+      title:
+        type: string
+      updatedAt:
+        type: string
+      userId:
+        type: string
+      viewCount:
+        type: integer
+      visibility:
+        description: '"private", "unlisted", "public"'
+        type: string
+    type: object
+  anchors.AnchorWithItemsResponse:
+    properties:
+      anchor:
+        $ref: '#/definitions/anchors.Anchor'
+      items:
+        items:
+          $ref: '#/definitions/anchors.Item'
+        type: array
+    type: object
+  anchors.AudioData:
+    properties:
+      cloudinaryUrl:
+        type: string
+      duration:
+        description: in seconds
+        type: integer
+      fileSize:
+        type: integer
+      publicId:
+        type: string
+    type: object
+  anchors.CreateAnchorRequest:
+    properties:
+      coverMediaType:
+        enum:
+        - icon
+        - emoji
+        - image
+        type: string
+      coverMediaValue:
+        type: string
+      description:
+        maxLength: 500
+        type: string
+      tags:
+        items:
+          type: string
+        maxItems: 5
+        type: array
+      title:
+        maxLength: 100
+        minLength: 3
+        type: string
+      visibility:
+        enum:
+        - private
+        - unlisted
+        - public
+        type: string
+    required:
+    - title
+    type: object
+  anchors.FileData:
+    properties:
+      cloudinaryUrl:
+        type: string
+      fileSize:
+        type: integer
+      fileType:
+        type: string
+      filename:
+        type: string
+      publicId:
+        type: string
+    type: object
+  anchors.ImageData:
+    properties:
+      cloudinaryUrl:
+        type: string
+      fileSize:
+        type: integer
+      height:
+        type: integer
+      publicId:
+        type: string
+      width:
+        type: integer
+    type: object
+  anchors.Item:
+    properties:
+      anchorId:
+        type: string
+      audioData:
+        $ref: '#/definitions/anchors.AudioData'
+      createdAt:
+        type: string
+      fileData:
+        $ref: '#/definitions/anchors.FileData'
+      id:
+        type: string
+      imageData:
+        $ref: '#/definitions/anchors.ImageData'
+      position:
+        type: integer
+      textData:
+        $ref: '#/definitions/anchors.TextData'
+      type:
+        description: '"url", "image", "audio", "file", "text"'
+        type: string
+      updatedAt:
+        type: string
+      urlData:
+        $ref: '#/definitions/anchors.URLData'
+    type: object
+  anchors.TextData:
+    properties:
+      content:
+        type: string
+    type: object
+  anchors.URLData:
+    properties:
+      description:
+        type: string
+      favicon:
+        type: string
+      originalUrl:
+        type: string
+      thumbnail:
+        type: string
+      title:
+        type: string
+    type: object
+  anchors.UpdateAnchorRequest:
+    properties:
+      coverMediaType:
+        enum:
+        - icon
+        - emoji
+        - image
+        type: string
+      coverMediaValue:
+        type: string
+      description:
+        maxLength: 500
+        type: string
+      tags:
+        items:
+          type: string
+        maxItems: 5
+        type: array
+      title:
+        maxLength: 100
+        minLength: 3
+        type: string
+      visibility:
+        enum:
+        - private
+        - unlisted
+        - public
+        type: string
+    type: object
+  auth.AuthResponse:
+    properties:
+      accessToken:
         type: string
       user:
         $ref: '#/definitions/auth.User'
     type: object
-  auth.LoginRequest:
-    description: User login request data
+  auth.GoogleAuthRequest:
     properties:
-      email:
-        example: user@example.com
-        type: string
-      password:
-        example: secret123
+      googleIdToken:
         type: string
     required:
-    - email
-    - password
+    - googleIdToken
     type: object
-  auth.RegisterRequest:
-    description: User registration request data
+  auth.UpdateProfileRequest:
     properties:
-      email:
-        example: user@example.com
+      bio:
+        maxLength: 160
         type: string
-      name:
-        example: John Doe
-        minLength: 2
+      displayName:
+        maxLength: 50
+        minLength: 3
         type: string
-      password:
-        example: secret123
-        minLength: 6
+    type: object
+  auth.UpdateUsernameRequest:
+    properties:
+      username:
+        maxLength: 20
+        minLength: 3
         type: string
     required:
-    - email
-    - name
-    - password
+    - username
     type: object
   auth.User:
-    description: User account information
     properties:
+      anchorCount:
+        type: integer
+      bio:
+        type: string
       createdAt:
-        example: "2023-01-01T00:00:00Z"
+        type: string
+      displayName:
         type: string
       email:
-        example: user@example.com
+        type: string
+      followerCount:
+        type: integer
+      followingCount:
+        type: integer
+      googleId:
         type: string
       id:
-        example: 507f1f77bcf86cd799439011
         type: string
-      name:
-        example: John Doe
+      isVerified:
+        type: boolean
+      joinedAt:
+        type: string
+      profilePictureUrl:
         type: string
       updatedAt:
-        example: "2023-01-01T00:00:00Z"
+        type: string
+      username:
+        type: string
+      usernameChanged:
+        type: boolean
+      usernameChangedAt:
         type: string
     type: object
   response.APIResponse:
@@ -76,67 +300,6 @@ definitions:
         example: true
         type: boolean
     type: object
-  todos.CreateTodoRequest:
-    description: Data required to create a new todo
-    properties:
-      description:
-        example: Get milk, bread, and eggs
-        type: string
-      dueDate:
-        example: "2023-12-31T23:59:59Z"
-        type: string
-      priority:
-        enum:
-        - low
-        - medium
-        - high
-        example: medium
-        type: string
-      tags:
-        example:
-        - groceries
-        - home
-        items:
-          type: string
-        type: array
-      title:
-        example: Buy groceries
-        minLength: 3
-        type: string
-    required:
-    - title
-    type: object
-  todos.UpdateTodoRequest:
-    description: Data for updating an existing todo
-    properties:
-      completed:
-        example: true
-        type: boolean
-      description:
-        example: Get milk, bread, and eggs
-        type: string
-      dueDate:
-        example: "2023-12-31T23:59:59Z"
-        type: string
-      priority:
-        enum:
-        - low
-        - medium
-        - high
-        example: high
-        type: string
-      tags:
-        example:
-        - groceries
-        - home
-        - urgent
-        items:
-          type: string
-        type: array
-      title:
-        example: Buy groceries
-        type: string
-    type: object
 host: localhost:8080
 info:
   contact: {}
@@ -144,25 +307,58 @@ info:
   title: GoTodo API
   version: "1.0"
 paths:
-  /auth/login:
-    post:
-      consumes:
-      - application/json
-      description: Authenticate user with email and password
+  /anchors:
+    get:
+      description: List anchors for a user
       parameters:
-      - description: User login credentials
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/auth.LoginRequest'
+      - description: User ID (defaults to authenticated user)
+        in: query
+        name: userId
+        type: string
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/auth.AuthResponse'
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/anchors.Anchor'
+                  type: array
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      summary: List anchors
+      tags:
+      - anchors
+    post:
+      consumes:
+      - application/json
+      description: Create a new anchor collection
+      parameters:
+      - description: Anchor details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/anchors.CreateAnchorRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/anchors.Anchor'
+              type: object
         "400":
           description: Bad Request
           schema:
@@ -171,164 +367,346 @@ paths:
           description: Unauthorized
           schema:
             $ref: '#/definitions/response.APIResponse'
-        "500":
-          description: Internal Server Error
+      security:
+      - BearerAuth: []
+      summary: Create a new anchor
+      tags:
+      - anchors
+  /anchors/{id}:
+    delete:
+      description: Soft delete an anchor
+      parameters:
+      - description: Anchor ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
           schema:
             $ref: '#/definitions/response.APIResponse'
-      summary: Login user
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Delete anchor
+      tags:
+      - anchors
+    get:
+      description: Get a specific anchor with its items
+      parameters:
+      - description: Anchor ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/anchors.AnchorWithItemsResponse'
+              type: object
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      summary: Get anchor by ID
+      tags:
+      - anchors
+    patch:
+      consumes:
+      - application/json
+      description: Update anchor details
+      parameters:
+      - description: Anchor ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Update fields
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/anchors.UpdateAnchorRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/anchors.Anchor'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Update anchor
+      tags:
+      - anchors
+  /anchors/{id}/items:
+    post:
+      consumes:
+      - application/json
+      description: Add a new item (URL or text) to an anchor
+      parameters:
+      - description: Anchor ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Item details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/anchors.AddItemRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/anchors.Item'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Add item to anchor
+      tags:
+      - anchors
+  /anchors/{id}/items/{itemId}:
+    delete:
+      description: Remove an item from an anchor
+      parameters:
+      - description: Anchor ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Item ID
+        in: path
+        name: itemId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Delete item from anchor
+      tags:
+      - anchors
+  /anchors/{id}/pin:
+    patch:
+      description: Pin or unpin an anchor
+      parameters:
+      - description: Anchor ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/anchors.Anchor'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Toggle pin status
+      tags:
+      - anchors
+  /auth/google:
+    post:
+      consumes:
+      - application/json
+      description: Authenticate user using Google ID token
+      parameters:
+      - description: Google ID Token
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/auth.GoogleAuthRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/auth.AuthResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      summary: Login with Google
       tags:
       - auth
   /auth/me:
     get:
-      consumes:
-      - application/json
-      description: Get the profile of the currently authenticated user
+      description: Get the authenticated user's profile
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            additionalProperties: true
-            type: object
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/auth.User'
+              type: object
         "401":
           description: Unauthorized
           schema:
             $ref: '#/definitions/response.APIResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/response.APIResponse'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/response.APIResponse'
       security:
       - BearerAuth: []
-      summary: Get current user profile
+      summary: Get current user
       tags:
       - auth
-  /auth/register:
-    post:
+  /auth/profile:
+    patch:
       consumes:
       - application/json
-      description: Register a new user with email, password, and name
+      description: Update display name and/or bio
       parameters:
-      - description: User registration data
+      - description: Profile updates
         in: body
         name: request
         required: true
         schema:
-          $ref: '#/definitions/auth.RegisterRequest'
+          $ref: '#/definitions/auth.UpdateProfileRequest'
       produces:
       - application/json
       responses:
-        "201":
-          description: Created
+        "200":
+          description: OK
           schema:
-            $ref: '#/definitions/auth.AuthResponse'
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/auth.User'
+              type: object
         "400":
           description: Bad Request
           schema:
             $ref: '#/definitions/response.APIResponse'
-        "500":
-          description: Internal Server Error
+        "401":
+          description: Unauthorized
           schema:
             $ref: '#/definitions/response.APIResponse'
-      summary: Register a new user
+      security:
+      - BearerAuth: []
+      summary: Update user profile
       tags:
       - auth
-  /todos/:
-    get:
+  /auth/username:
+    patch:
       consumes:
       - application/json
-      description: Get a list of todos for the authenticated user with optional filtering
+      description: Change username (can only be done once)
       parameters:
-      - description: Filter by completion status
-        in: query
-        name: completed
-        type: boolean
-      - description: 'Maximum number of todos to return (default: 50, max: 100)'
-        in: query
-        name: limit
-        type: integer
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties: true
-            type: object
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/response.APIResponse'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/response.APIResponse'
-      security:
-      - BearerAuth: []
-      summary: List todos
-      tags:
-      - todos
-    post:
-      consumes:
-      - application/json
-      description: Create a new todo for the authenticated user
-      parameters:
-      - description: Todo creation data
+      - description: New username
         in: body
         name: request
         required: true
         schema:
-          $ref: '#/definitions/todos.CreateTodoRequest'
-      produces:
-      - application/json
-      responses:
-        "201":
-          description: Created
-          schema:
-            additionalProperties: true
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/response.APIResponse'
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/response.APIResponse'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/response.APIResponse'
-      security:
-      - BearerAuth: []
-      summary: Create a new todo
-      tags:
-      - todos
-  /todos/{id}:
-    delete:
-      consumes:
-      - application/json
-      description: Delete a todo for the authenticated user
-      parameters:
-      - description: Todo ID
-        in: path
-        name: id
-        required: true
-        type: string
+          $ref: '#/definitions/auth.UpdateUsernameRequest'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/auth.User'
+              type: object
         "400":
           description: Bad Request
           schema:
@@ -337,91 +715,11 @@ paths:
           description: Unauthorized
           schema:
             $ref: '#/definitions/response.APIResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/response.APIResponse'
       security:
       - BearerAuth: []
-      summary: Delete a todo
+      summary: Update username
       tags:
-      - todos
-    get:
-      consumes:
-      - application/json
-      description: Get a specific todo by ID for the authenticated user
-      parameters:
-      - description: Todo ID
-        in: path
-        name: id
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties: true
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/response.APIResponse'
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/response.APIResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/response.APIResponse'
-      security:
-      - BearerAuth: []
-      summary: Get a todo by ID
-      tags:
-      - todos
-    put:
-      consumes:
-      - application/json
-      description: Update an existing todo for the authenticated user
-      parameters:
-      - description: Todo ID
-        in: path
-        name: id
-        required: true
-        type: string
-      - description: Todo update data
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/todos.UpdateTodoRequest'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties: true
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/response.APIResponse'
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/response.APIResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/response.APIResponse'
-      security:
-      - BearerAuth: []
-      summary: Update a todo
-      tags:
-      - todos
+      - auth
 schemes:
 - http
 securityDefinitions:
