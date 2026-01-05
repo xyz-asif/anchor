@@ -47,3 +47,39 @@ func NewAuthMiddleware(repo *auth.Repository, cfg *config.Config) gin.HandlerFun
 		c.Next()
 	}
 }
+
+// OptionalAuthMiddleware attempts to authenticate but doesn't require it
+// If valid token present: sets "user" in context
+// If no token or invalid token: continues without setting user (no abort)
+func OptionalAuthMiddleware(repo *auth.Repository, cfg *config.Config) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authHeader := c.GetHeader("Authorization")
+		if authHeader == "" {
+			c.Next()
+			return
+		}
+
+		parts := strings.Split(authHeader, " ")
+		if len(parts) != 2 || parts[0] != "Bearer" {
+			c.Next()
+			return
+		}
+
+		tokenString := parts[1]
+		userID, err := auth.ValidateJWT(tokenString, cfg)
+		if err != nil {
+			// Invalid token - continue without auth (don't abort)
+			c.Next()
+			return
+		}
+
+		user, err := repo.GetUserByID(c.Request.Context(), userID)
+		if err != nil {
+			c.Next()
+			return
+		}
+
+		c.Set("user", user)
+		c.Next()
+	}
+}

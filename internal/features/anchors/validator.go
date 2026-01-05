@@ -2,6 +2,7 @@ package anchors
 
 import (
 	"errors"
+	"fmt"
 	"net/url"
 	"regexp"
 	"strings"
@@ -244,6 +245,28 @@ func ValidateAddItemRequest(req *AddItemRequest) error {
 		if err := ValidateTextContent(*req.Content); err != nil {
 			return err
 		}
+	}
+
+	return nil
+}
+
+// ValidateReorderItemsRequest validates the reorder request
+func ValidateReorderItemsRequest(req *ReorderItemsRequest, expectedCount int) error {
+	if len(req.ItemIDs) == 0 {
+		return errors.New("itemIds cannot be empty")
+	}
+
+	if len(req.ItemIDs) != expectedCount {
+		return fmt.Errorf("must include all %d items, got %d", expectedCount, len(req.ItemIDs))
+	}
+
+	// Check for duplicates
+	seen := make(map[string]bool)
+	for _, id := range req.ItemIDs {
+		if seen[id] {
+			return errors.New("duplicate item ID found")
+		}
+		seen[id] = true
 	}
 
 	return nil

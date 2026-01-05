@@ -169,6 +169,33 @@ definitions:
       urlData:
         $ref: '#/definitions/anchors.URLData'
     type: object
+  anchors.PaginatedResponse:
+    properties:
+      data: {}
+      pagination:
+        properties:
+          hasMore:
+            type: boolean
+          limit:
+            type: integer
+          page:
+            type: integer
+          total:
+            type: integer
+          totalPages:
+            type: integer
+        type: object
+    type: object
+  anchors.ReorderItemsRequest:
+    properties:
+      itemIds:
+        items:
+          type: string
+        minItems: 1
+        type: array
+    required:
+    - itemIds
+    type: object
   anchors.TextData:
     properties:
       content:
@@ -315,6 +342,14 @@ paths:
         in: query
         name: userId
         type: string
+      - description: Page number (default 1)
+        in: query
+        name: page
+        type: integer
+      - description: Items per page (default 20, max 50)
+        in: query
+        name: limit
+        type: integer
       produces:
       - application/json
       responses:
@@ -325,9 +360,7 @@ paths:
             - $ref: '#/definitions/response.APIResponse'
             - properties:
                 data:
-                  items:
-                    $ref: '#/definitions/anchors.Anchor'
-                  type: array
+                  $ref: '#/definitions/anchors.PaginatedResponse'
               type: object
         "400":
           description: Bad Request
@@ -477,11 +510,93 @@ paths:
       summary: Update anchor
       tags:
       - anchors
+  /anchors/{id}/clone:
+    post:
+      description: Create a deep copy of an anchor and all its items to your account
+      parameters:
+      - description: Anchor ID to clone
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/anchors.Anchor'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Clone an anchor
+      tags:
+      - anchors
   /anchors/{id}/items:
+    get:
+      description: Get paginated list of items in an anchor
+      parameters:
+      - description: Anchor ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Page number (default 1)
+        in: query
+        name: page
+        type: integer
+      - description: Items per page (default 20, max 50)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/anchors.PaginatedResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      summary: List items in anchor
+      tags:
+      - anchors
     post:
       consumes:
       - application/json
-      description: Add a new item (URL or text) to an anchor
+      description: Add a new item (URL or text) to an anchor. For URL items, metadata
+        (title, description, favicon, thumbnail) is automatically fetched.
       parameters:
       - description: Anchor ID
         in: path
@@ -551,6 +666,106 @@ paths:
       security:
       - BearerAuth: []
       summary: Delete item from anchor
+      tags:
+      - anchors
+  /anchors/{id}/items/reorder:
+    patch:
+      consumes:
+      - application/json
+      description: Update the position of items within an anchor. All item IDs must
+        be provided in the new desired order.
+      parameters:
+      - description: Anchor ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Array of item IDs in new order
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/anchors.ReorderItemsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/anchors.Item'
+                  type: array
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Reorder items in anchor
+      tags:
+      - anchors
+  /anchors/{id}/items/upload:
+    post:
+      consumes:
+      - multipart/form-data
+      description: Upload a file (image, audio, or generic file) and add it as an
+        item
+      parameters:
+      - description: Anchor ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Item type (image, audio, file)
+        in: formData
+        name: type
+        required: true
+        type: string
+      - description: File to upload
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/anchors.Item'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Upload and add item to anchor
       tags:
       - anchors
   /anchors/{id}/pin:

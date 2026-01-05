@@ -90,47 +90,67 @@ func (r *Repository) GetAnchorByID(ctx context.Context, anchorID primitive.Objec
 	return &anchor, nil
 }
 
-// GetUserAnchors retrieves all anchors for a specific user
-func (r *Repository) GetUserAnchors(ctx context.Context, userID primitive.ObjectID) ([]Anchor, error) {
+// GetUserAnchors retrieves all anchors for a specific user with pagination
+func (r *Repository) GetUserAnchors(ctx context.Context, userID primitive.ObjectID, page int, limit int) ([]Anchor, int64, error) {
 	filter := bson.M{
 		"userId":    userID,
 		"deletedAt": nil,
 	}
 
-	cursor, err := r.anchorsCollection.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "lastItemAddedAt", Value: -1}}))
+	opts := options.Find().
+		SetSort(bson.D{{Key: "lastItemAddedAt", Value: -1}}).
+		SetSkip(int64((page - 1) * limit)).
+		SetLimit(int64(limit))
+
+	cursor, err := r.anchorsCollection.Find(ctx, filter, opts)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer cursor.Close(ctx)
 
 	var anchors []Anchor
 	if err = cursor.All(ctx, &anchors); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	return anchors, nil
+	total, err := r.anchorsCollection.CountDocuments(ctx, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return anchors, total, nil
 }
 
-// GetPublicUserAnchors retrieves only public and unlisted anchors for a user
-func (r *Repository) GetPublicUserAnchors(ctx context.Context, userID primitive.ObjectID) ([]Anchor, error) {
+// GetPublicUserAnchors retrieves only public and unlisted anchors for a user with pagination
+func (r *Repository) GetPublicUserAnchors(ctx context.Context, userID primitive.ObjectID, page int, limit int) ([]Anchor, int64, error) {
 	filter := bson.M{
 		"userId":     userID,
 		"deletedAt":  nil,
 		"visibility": bson.M{"$in": []string{VisibilityPublic, VisibilityUnlisted}},
 	}
 
-	cursor, err := r.anchorsCollection.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "lastItemAddedAt", Value: -1}}))
+	opts := options.Find().
+		SetSort(bson.D{{Key: "lastItemAddedAt", Value: -1}}).
+		SetSkip(int64((page - 1) * limit)).
+		SetLimit(int64(limit))
+
+	cursor, err := r.anchorsCollection.Find(ctx, filter, opts)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer cursor.Close(ctx)
 
 	var anchors []Anchor
 	if err = cursor.All(ctx, &anchors); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	return anchors, nil
+	total, err := r.anchorsCollection.CountDocuments(ctx, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return anchors, total, nil
 }
 
 // UpdateAnchor updates specific fields of an anchor
@@ -228,6 +248,15 @@ func (r *Repository) CreateItem(ctx context.Context, item *Item) error {
 	return nil
 }
 
+// CreateItems inserts multiple items into the database
+func (r *Repository) CreateItems(ctx context.Context, items []interface{}) error {
+	if len(items) == 0 {
+		return nil
+	}
+	_, err := r.itemsCollection.InsertMany(ctx, items)
+	return err
+}
+
 // GetAnchorItems retrieves all items for a specific anchor, ordered by position
 func (r *Repository) GetAnchorItems(ctx context.Context, anchorID primitive.ObjectID) ([]Item, error) {
 	filter := bson.M{"anchorId": anchorID}
@@ -243,6 +272,34 @@ func (r *Repository) GetAnchorItems(ctx context.Context, anchorID primitive.Obje
 	}
 
 	return items, nil
+}
+
+// GetAnchorItemsPaginated retrieves items for an anchor with pagination
+func (r *Repository) GetAnchorItemsPaginated(ctx context.Context, anchorID primitive.ObjectID, page int, limit int) ([]Item, int64, error) {
+	filter := bson.M{"anchorId": anchorID}
+
+	opts := options.Find().
+		SetSort(bson.D{{Key: "position", Value: 1}}).
+		SetSkip(int64((page - 1) * limit)).
+		SetLimit(int64(limit))
+
+	cursor, err := r.itemsCollection.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer cursor.Close(ctx)
+
+	var items []Item
+	if err = cursor.All(ctx, &items); err != nil {
+		return nil, 0, err
+	}
+
+	total, err := r.itemsCollection.CountDocuments(ctx, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return items, total, nil
 }
 
 // GetItemByID finds an item by its ID

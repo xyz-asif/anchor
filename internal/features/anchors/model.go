@@ -197,3 +197,21 @@ func (a *Anchor) CanBeViewed(viewerUserID primitive.ObjectID) bool {
 func (a *Anchor) IsOwnedBy(userID primitive.ObjectID) bool {
 	return a.UserID == userID
 }
+
+// PaginationQuery represents standard pagination query parameters
+type PaginationQuery struct {
+	Page  int `form:"page,default=1" binding:"min=1"`
+	Limit int `form:"limit,default=20" binding:"min=1,max=50"`
+}
+
+// PaginatedResponse represents a standard paginated response
+type PaginatedResponse struct {
+	Data       interface{} `json:"data"`
+	Pagination struct {
+		Page       int   `json:"page"`
+		Limit      int   `json:"limit"`
+		Total      int64 `json:"total"`
+		TotalPages int   `json:"totalPages"`
+		HasMore    bool  `json:"hasMore"`
+	} `json:"pagination"`
+}

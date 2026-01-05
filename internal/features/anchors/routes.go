@@ -1,10 +1,13 @@
 package anchors
 
 import (
+	"log"
+
 	"github.com/gin-gonic/gin"
 	"github.com/xyz-asif/gotodo/internal/config"
 	"github.com/xyz-asif/gotodo/internal/features/auth"
 	"github.com/xyz-asif/gotodo/internal/middleware"
+	"github.com/xyz-asif/gotodo/internal/pkg/cloudinary"
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
@@ -14,26 +17,26 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Con
 	repo := NewRepository(db)
 	authRepo := auth.NewRepository(db)
 
+	// Initialize Cloudinary service
+	cloudinarySvc, err := cloudinary.NewService(cfg.CloudinaryCloudName, cfg.CloudinaryAPIKey, cfg.CloudinaryAPISecret, "anchors")
+	if err != nil {
+		log.Printf("Failed to initialize cloudinary service: %v", err)
+	}
+
 	// Initialize handler
-	handler := NewHandler(repo, authRepo, cfg)
+	handler := NewHandler(repo, authRepo, cfg, cloudinarySvc)
 
 	// Initialize auth middleware
 	authMiddleware := middleware.NewAuthMiddleware(authRepo, cfg)
+	optionalAuth := middleware.OptionalAuthMiddleware(authRepo, cfg)
 
 	// Anchor routes group
 	anchors := router.Group("/anchors")
 	{
-		// Optional Auth Middleware for public routes
-		// We use a custom inline middleware or just a wrapper if needed,
-		// but per instructions we currently expose them without the strict auth middleware
-		// to allow public access. The handler handles "Exists" checks.
-		// Note: To fully support "optional auth", an OptionalAuthMiddleware would be needed
-		// that attempts to set the user but doesn't abort on failure.
-		// For now, we follow the requested structure.
-
-		// Public routes (no auth required)
-		anchors.GET("/:id", handler.GetAnchor)
-		anchors.GET("", handler.ListUserAnchors)
+		// Public routes WITH optional auth (can identify logged-in users)
+		anchors.GET("/:id", optionalAuth, handler.GetAnchor)
+		anchors.GET("/:id/items", optionalAuth, handler.ListAnchorItems)
+		anchors.GET("", optionalAuth, handler.ListUserAnchors)
 
 		// Protected routes (require authentication)
 		protected := anchors.Group("")
@@ -42,11 +45,14 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Con
 			protected.POST("", handler.CreateAnchor)
 			protected.PATCH("/:id", handler.UpdateAnchor)
 			protected.DELETE("/:id", handler.DeleteAnchor)
+			protected.POST("/:id/clone", handler.CloneAnchor)
 			protected.PATCH("/:id/pin", handler.TogglePin)
 
 			// Item routes
 			protected.POST("/:id/items", handler.AddItem)
+			protected.POST("/:id/items/upload", handler.UploadItem)
 			protected.DELETE("/:id/items/:itemId", handler.DeleteItem)
+			protected.PATCH("/:id/items/reorder", handler.ReorderItems)
 		}
 	}
 }
