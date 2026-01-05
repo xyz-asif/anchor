@@ -169,3 +169,64 @@ func (r *Repository) IncrementAnchorCount(ctx context.Context, userID primitive.
 
 	return nil
 }
+
+// IncrementFollowerCount increments or decrements a user's follower count
+func (r *Repository) IncrementFollowerCount(ctx context.Context, userID primitive.ObjectID, delta int) error {
+	filter := bson.M{"_id": userID}
+	update := bson.M{
+		"$inc": bson.M{"followerCount": delta},
+		"$set": bson.M{"updatedAt": time.Now()},
+	}
+
+	result, err := r.collection.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return err
+	}
+
+	if result.MatchedCount == 0 {
+		return errors.New("user not found")
+	}
+
+	return nil
+}
+
+// IncrementFollowingCount increments or decrements a user's following count
+func (r *Repository) IncrementFollowingCount(ctx context.Context, userID primitive.ObjectID, delta int) error {
+	filter := bson.M{"_id": userID}
+	update := bson.M{
+		"$inc": bson.M{"followingCount": delta},
+		"$set": bson.M{"updatedAt": time.Now()},
+	}
+
+	result, err := r.collection.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return err
+	}
+
+	if result.MatchedCount == 0 {
+		return errors.New("user not found")
+	}
+
+	return nil
+}
+
+// GetUsersByIDs fetches multiple users by their IDs (for enriching follow lists)
+func (r *Repository) GetUsersByIDs(ctx context.Context, userIDs []primitive.ObjectID) ([]User, error) {
+	if len(userIDs) == 0 {
+		return []User{}, nil
+	}
+
+	filter := bson.M{"_id": bson.M{"$in": userIDs}}
+	cursor, err := r.collection.Find(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var users []User
+	if err = cursor.All(ctx, &users); err != nil {
+		return nil, err
+	}
+
+	return users, nil
+}

@@ -311,6 +311,87 @@ definitions:
       usernameChangedAt:
         type: string
     type: object
+  follows.FollowActionRequest:
+    properties:
+      action:
+        enum:
+        - follow
+        - unfollow
+        type: string
+    required:
+    - action
+    type: object
+  follows.FollowActionResponse:
+    properties:
+      currentUser:
+        $ref: '#/definitions/follows.FollowCurrentUserInfo'
+      isFollowing:
+        type: boolean
+      targetUser:
+        $ref: '#/definitions/follows.FollowTargetUserInfo'
+    type: object
+  follows.FollowCurrentUserInfo:
+    properties:
+      followingCount:
+        type: integer
+    type: object
+  follows.FollowStatusResponse:
+    properties:
+      isFollowedBy:
+        type: boolean
+      isFollowing:
+        type: boolean
+      isMutual:
+        type: boolean
+    type: object
+  follows.FollowTargetUserInfo:
+    properties:
+      displayName:
+        type: string
+      followerCount:
+        type: integer
+      id:
+        type: string
+      username:
+        type: string
+    type: object
+  follows.FollowUserResponse:
+    properties:
+      bio:
+        type: string
+      displayName:
+        type: string
+      followedAt:
+        type: string
+      id:
+        type: string
+      isFollowing:
+        type: boolean
+      profilePicture:
+        type: string
+      username:
+        type: string
+    type: object
+  follows.PaginatedFollowResponse:
+    properties:
+      data:
+        items:
+          $ref: '#/definitions/follows.FollowUserResponse'
+        type: array
+      pagination:
+        properties:
+          hasMore:
+            type: boolean
+          limit:
+            type: integer
+          page:
+            type: integer
+          total:
+            type: integer
+          totalPages:
+            type: integer
+        type: object
+    type: object
   response.APIResponse:
     properties:
       code:
@@ -935,6 +1016,136 @@ paths:
       summary: Update username
       tags:
       - auth
+  /users/{id}/follow:
+    post:
+      consumes:
+      - application/json
+      description: Follow or unfollow a user based on the action specified
+      parameters:
+      - description: Target user's ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Follow action
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/follows.FollowActionRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/follows.FollowActionResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Follow or unfollow user
+      tags:
+      - follows
+  /users/{id}/follow/status:
+    get:
+      description: Check if the current user follows the target user, and if the target
+        follows back
+      parameters:
+      - description: Target user's ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/follows.FollowStatusResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Check follow status
+      tags:
+      - follows
+  /users/{id}/follows:
+    get:
+      description: Get paginated list of followers OR users being followed
+      parameters:
+      - description: Target user's ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 'Type: followers or following'
+        in: query
+        name: type
+        required: true
+        type: string
+      - description: Page number (default 1)
+        in: query
+        name: page
+        type: integer
+      - description: Items per page (default 20, max 50)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/follows.PaginatedFollowResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      summary: List followers or following
+      tags:
+      - follows
 schemes:
 - http
 securityDefinitions:
