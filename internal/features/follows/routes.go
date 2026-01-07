@@ -4,6 +4,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/xyz-asif/gotodo/internal/config"
 	"github.com/xyz-asif/gotodo/internal/features/auth"
+	"github.com/xyz-asif/gotodo/internal/features/notifications"
 	"github.com/xyz-asif/gotodo/internal/middleware"
 	"go.mongodb.org/mongo-driver/mongo"
 )
@@ -13,9 +14,10 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Con
 	// Initialize repositories
 	repo := NewRepository(db)
 	authRepo := auth.NewRepository(db)
+	notificationService := notifications.GetService(db)
 
 	// Initialize handler
-	handler := NewHandler(repo, authRepo, cfg)
+	handler := NewHandler(repo, authRepo, notificationService, cfg)
 
 	// Initialize middlewares
 	authMiddleware := middleware.NewAuthMiddleware(authRepo, cfg)

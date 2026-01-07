@@ -1,23 +1,5 @@
 basePath: /api/v1
 definitions:
-  anchors.AddItemRequest:
-    properties:
-      content:
-        maxLength: 10000
-        type: string
-      type:
-        enum:
-        - url
-        - image
-        - audio
-        - file
-        - text
-        type: string
-      url:
-        type: string
-    required:
-    - type
-    type: object
   anchors.Anchor:
     properties:
       cloneCount:
@@ -39,6 +21,8 @@ definitions:
         type: string
       description:
         type: string
+      engagementScore:
+        type: integer
       id:
         type: string
       isPinned:
@@ -73,6 +57,7 @@ definitions:
         items:
           $ref: '#/definitions/anchors.Item'
         type: array
+      likeSummary: {}
     type: object
   anchors.AudioData:
     properties:
@@ -186,16 +171,6 @@ definitions:
             type: integer
         type: object
     type: object
-  anchors.ReorderItemsRequest:
-    properties:
-      itemIds:
-        items:
-          type: string
-        minItems: 1
-        type: array
-    required:
-    - itemIds
-    type: object
   anchors.TextData:
     properties:
       content:
@@ -250,6 +225,20 @@ definitions:
       user:
         $ref: '#/definitions/auth.User'
     type: object
+  auth.CoverImageResponse:
+    properties:
+      coverImageUrl:
+        type: string
+    type: object
+  auth.DevLoginRequest:
+    properties:
+      displayName:
+        type: string
+      email:
+        type: string
+    required:
+    - email
+    type: object
   auth.GoogleAuthRequest:
     properties:
       googleIdToken:
@@ -257,14 +246,116 @@ definitions:
     required:
     - googleIdToken
     type: object
+  auth.LoginResponse:
+    properties:
+      isNewUser:
+        type: boolean
+      requiresUsername:
+        type: boolean
+      token:
+        type: string
+      user: {}
+    type: object
+  auth.OwnProfileResponse:
+    properties:
+      anchorCount:
+        type: integer
+      bio:
+        type: string
+      coverImageUrl:
+        type: string
+      createdAt:
+        type: string
+      displayName:
+        type: string
+      email:
+        type: string
+      followerCount:
+        type: integer
+      followingCount:
+        type: integer
+      googleId:
+        type: string
+      id:
+        type: string
+      isVerified:
+        type: boolean
+      joinedAt:
+        type: string
+      profilePictureUrl:
+        type: string
+      updatedAt:
+        type: string
+      username:
+        type: string
+    type: object
+  auth.PinnedAnchorResponse:
+    properties:
+      cloneCount:
+        type: integer
+      coverMediaType:
+        type: string
+      coverMediaValue:
+        type: string
+      createdAt:
+        type: string
+      description:
+        type: string
+      id:
+        type: string
+      itemCount:
+        type: integer
+      likeCount:
+        type: integer
+      title:
+        type: string
+      visibility:
+        type: string
+    type: object
+  auth.ProfilePictureResponse:
+    properties:
+      profilePictureUrl:
+        type: string
+    type: object
+  auth.PublicProfileResponse:
+    properties:
+      anchorCount:
+        type: integer
+      bio:
+        type: string
+      coverImageUrl:
+        type: string
+      displayName:
+        type: string
+      followerCount:
+        type: integer
+      followingCount:
+        type: integer
+      id:
+        type: string
+      isFollowedBy:
+        type: boolean
+      isFollowing:
+        type: boolean
+      isMutual:
+        type: boolean
+      isVerified:
+        type: boolean
+      joinedAt:
+        type: string
+      profilePictureUrl:
+        type: string
+      username:
+        type: string
+    type: object
   auth.UpdateProfileRequest:
     properties:
       bio:
-        maxLength: 160
+        maxLength: 200
         type: string
       displayName:
         maxLength: 50
-        minLength: 3
+        minLength: 2
         type: string
     type: object
   auth.UpdateUsernameRequest:
@@ -281,6 +372,8 @@ definitions:
       anchorCount:
         type: integer
       bio:
+        type: string
+      coverImageUrl:
         type: string
       createdAt:
         type: string
@@ -310,6 +403,327 @@ definitions:
         type: boolean
       usernameChangedAt:
         type: string
+    type: object
+  comments.CommentAuthor:
+    properties:
+      displayName:
+        type: string
+      id:
+        type: string
+      isVerified:
+        type: boolean
+      profilePicture:
+        type: string
+      username:
+        type: string
+    type: object
+  comments.CommentEngagement:
+    properties:
+      hasLiked:
+        type: boolean
+    type: object
+  comments.CommentLikeActionRequest:
+    properties:
+      action:
+        enum:
+        - like
+        - unlike
+        type: string
+    required:
+    - action
+    type: object
+  comments.CommentLikeResponse:
+    properties:
+      hasLiked:
+        type: boolean
+      likeCount:
+        type: integer
+    type: object
+  comments.CommentListMeta:
+    properties:
+      anchorId:
+        type: string
+      sort:
+        type: string
+    type: object
+  comments.CommentResponse:
+    properties:
+      anchorId:
+        type: string
+      author:
+        $ref: '#/definitions/comments.CommentAuthor'
+      content:
+        type: string
+      createdAt:
+        type: string
+      engagement:
+        $ref: '#/definitions/comments.CommentEngagement'
+      id:
+        type: string
+      isEdited:
+        type: boolean
+      likeCount:
+        type: integer
+      mentions:
+        items:
+          type: string
+        type: array
+      updatedAt:
+        type: string
+    type: object
+  comments.CreateCommentRequest:
+    properties:
+      content:
+        maxLength: 1000
+        minLength: 1
+        type: string
+    required:
+    - content
+    type: object
+  comments.PaginatedCommentsResponse:
+    properties:
+      comments:
+        items:
+          $ref: '#/definitions/comments.CommentResponse'
+        type: array
+      meta:
+        $ref: '#/definitions/comments.CommentListMeta'
+      pagination:
+        properties:
+          hasMore:
+            type: boolean
+          limit:
+            type: integer
+          page:
+            type: integer
+          total:
+            type: integer
+          totalPages:
+            type: integer
+        type: object
+    type: object
+  comments.UpdateCommentRequest:
+    properties:
+      content:
+        maxLength: 1000
+        minLength: 1
+        type: string
+    required:
+    - content
+    type: object
+  feed.DiscoverItem:
+    properties:
+      author:
+        $ref: '#/definitions/feed.DiscoverItemAuthor'
+      cloneCount:
+        type: integer
+      commentCount:
+        type: integer
+      coverMediaType:
+        type: string
+      coverMediaValue:
+        type: string
+      createdAt:
+        type: string
+      description:
+        type: string
+      engagement:
+        $ref: '#/definitions/feed.FeedEngagement'
+      engagementScore:
+        type: integer
+      id:
+        type: string
+      isPinned:
+        type: boolean
+      itemCount:
+        type: integer
+      lastItemAddedAt:
+        type: string
+      likeCount:
+        type: integer
+      preview:
+        $ref: '#/definitions/feed.FeedPreview'
+      tags:
+        items:
+          type: string
+        type: array
+      title:
+        type: string
+      visibility:
+        type: string
+    type: object
+  feed.DiscoverItemAuthor:
+    properties:
+      displayName:
+        type: string
+      followerCount:
+        type: integer
+      id:
+        type: string
+      isVerified:
+        type: boolean
+      profilePicture:
+        type: string
+      username:
+        type: string
+    type: object
+  feed.DiscoverMeta:
+    properties:
+      category:
+        type: string
+      emptyReason:
+        type: string
+      feedType:
+        type: string
+      isAuthenticated:
+        type: boolean
+      tag:
+        type: string
+    type: object
+  feed.DiscoverResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/feed.DiscoverItem'
+        type: array
+      meta:
+        $ref: '#/definitions/feed.DiscoverMeta'
+      pagination:
+        $ref: '#/definitions/feed.FeedPagination'
+    type: object
+  feed.FeedEngagement:
+    properties:
+      hasCloned:
+        type: boolean
+      hasLiked:
+        type: boolean
+      likeSummary:
+        $ref: '#/definitions/feed.FeedLikeSummary'
+    type: object
+  feed.FeedItem:
+    properties:
+      author:
+        $ref: '#/definitions/feed.FeedItemAuthor'
+      cloneCount:
+        type: integer
+      commentCount:
+        type: integer
+      coverMediaType:
+        type: string
+      coverMediaValue:
+        type: string
+      createdAt:
+        type: string
+      description:
+        type: string
+      engagement:
+        $ref: '#/definitions/feed.FeedEngagement'
+      id:
+        type: string
+      isPinned:
+        type: boolean
+      itemCount:
+        type: integer
+      lastItemAddedAt:
+        type: string
+      likeCount:
+        type: integer
+      preview:
+        $ref: '#/definitions/feed.FeedPreview'
+      tags:
+        items:
+          type: string
+        type: array
+      title:
+        type: string
+      visibility:
+        type: string
+    type: object
+  feed.FeedItemAuthor:
+    properties:
+      displayName:
+        type: string
+      id:
+        type: string
+      isVerified:
+        type: boolean
+      profilePicture:
+        type: string
+      username:
+        type: string
+    type: object
+  feed.FeedLikeSummary:
+    properties:
+      likedByFollowing:
+        items:
+          $ref: '#/definitions/feed.FeedLikeSummaryUser'
+        type: array
+      otherLikersCount:
+        type: integer
+      totalCount:
+        type: integer
+    type: object
+  feed.FeedLikeSummaryUser:
+    properties:
+      displayName:
+        type: string
+      id:
+        type: string
+      profilePicture:
+        type: string
+      username:
+        type: string
+    type: object
+  feed.FeedMeta:
+    properties:
+      emptyReason:
+        type: string
+      feedType:
+        type: string
+      includesOwnAnchors:
+        type: boolean
+      totalFollowing:
+        type: integer
+    type: object
+  feed.FeedPagination:
+    properties:
+      hasMore:
+        type: boolean
+      itemCount:
+        type: integer
+      limit:
+        type: integer
+      nextCursor:
+        type: string
+    type: object
+  feed.FeedPreview:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/feed.FeedPreviewItem'
+        type: array
+    type: object
+  feed.FeedPreviewItem:
+    properties:
+      snippet:
+        type: string
+      thumbnail:
+        type: string
+      title:
+        type: string
+      type:
+        type: string
+    type: object
+  feed.FeedResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/feed.FeedItem'
+        type: array
+      meta:
+        $ref: '#/definitions/feed.FeedMeta'
+      pagination:
+        $ref: '#/definitions/feed.FeedPagination'
     type: object
   follows.FollowActionRequest:
     properties:
@@ -392,6 +806,167 @@ definitions:
             type: integer
         type: object
     type: object
+  likes.LikeActionRequest:
+    properties:
+      action:
+        enum:
+        - like
+        - unlike
+        type: string
+    required:
+    - action
+    type: object
+  likes.LikeActionResponse:
+    properties:
+      hasLiked:
+        type: boolean
+      likeCount:
+        type: integer
+    type: object
+  likes.LikeStatusResponse:
+    properties:
+      hasLiked:
+        type: boolean
+      likeCount:
+        type: integer
+    type: object
+  likes.LikeSummaryResponse:
+    properties:
+      hasLiked:
+        type: boolean
+      likedByFollowing:
+        items:
+          $ref: '#/definitions/likes.LikeSummaryUser'
+        type: array
+      otherLikersCount:
+        type: integer
+      totalCount:
+        type: integer
+    type: object
+  likes.LikeSummaryUser:
+    properties:
+      displayName:
+        type: string
+      id:
+        type: string
+      profilePicture:
+        type: string
+      username:
+        type: string
+    type: object
+  likes.LikerUserResponse:
+    properties:
+      displayName:
+        type: string
+      id:
+        type: string
+      isFollowing:
+        type: boolean
+      likedAt:
+        type: string
+      profilePicture:
+        type: string
+      username:
+        type: string
+    type: object
+  likes.PaginatedLikersResponse:
+    properties:
+      data:
+        items:
+          $ref: '#/definitions/likes.LikerUserResponse'
+        type: array
+      pagination:
+        properties:
+          hasMore:
+            type: boolean
+          limit:
+            type: integer
+          page:
+            type: integer
+          total:
+            type: integer
+          totalPages:
+            type: integer
+        type: object
+    type: object
+  notifications.MarkAllReadResponse:
+    properties:
+      markedCount:
+        type: integer
+    type: object
+  notifications.MarkReadResponse:
+    properties:
+      id:
+        type: string
+      isRead:
+        type: boolean
+    type: object
+  notifications.NotificationActor:
+    properties:
+      displayName:
+        type: string
+      id:
+        type: string
+      profilePicture:
+        type: string
+      username:
+        type: string
+    type: object
+  notifications.NotificationAnchor:
+    properties:
+      id:
+        type: string
+      title:
+        type: string
+    type: object
+  notifications.NotificationResponse:
+    properties:
+      actor:
+        $ref: '#/definitions/notifications.NotificationActor'
+      anchor:
+        $ref: '#/definitions/notifications.NotificationAnchor'
+      anchorId:
+        type: string
+      createdAt:
+        type: string
+      id:
+        type: string
+      isRead:
+        type: boolean
+      preview:
+        type: string
+      resourceId:
+        type: string
+      resourceType:
+        type: string
+      type:
+        type: string
+    type: object
+  notifications.PaginatedNotificationsResponse:
+    properties:
+      notifications:
+        items:
+          $ref: '#/definitions/notifications.NotificationResponse'
+        type: array
+      pagination:
+        properties:
+          hasMore:
+            type: boolean
+          limit:
+            type: integer
+          page:
+            type: integer
+          total:
+            type: integer
+          totalPages:
+            type: integer
+        type: object
+    type: object
+  notifications.UnreadCountResponse:
+    properties:
+      unreadCount:
+        type: integer
+    type: object
   response.APIResponse:
     properties:
       code:
@@ -408,6 +983,174 @@ definitions:
         example: true
         type: boolean
     type: object
+  search.AnchorSearchMeta:
+    properties:
+      query:
+        type: string
+      sort:
+        type: string
+      tag:
+        type: string
+    type: object
+  search.PaginatedAnchorSearchResponse:
+    properties:
+      anchors:
+        items:
+          $ref: '#/definitions/search.SearchAnchorResult'
+        type: array
+      meta:
+        $ref: '#/definitions/search.AnchorSearchMeta'
+      pagination:
+        properties:
+          hasMore:
+            type: boolean
+          limit:
+            type: integer
+          page:
+            type: integer
+          total:
+            type: integer
+          totalPages:
+            type: integer
+        type: object
+    type: object
+  search.PaginatedUserSearchResponse:
+    properties:
+      meta:
+        $ref: '#/definitions/search.UserSearchMeta'
+      pagination:
+        properties:
+          hasMore:
+            type: boolean
+          limit:
+            type: integer
+          page:
+            type: integer
+          total:
+            type: integer
+          totalPages:
+            type: integer
+        type: object
+      users:
+        items:
+          $ref: '#/definitions/search.SearchUserResult'
+        type: array
+    type: object
+  search.SearchAnchorAuthor:
+    properties:
+      displayName:
+        type: string
+      id:
+        type: string
+      isVerified:
+        type: boolean
+      profilePicture:
+        type: string
+      username:
+        type: string
+    type: object
+  search.SearchAnchorResult:
+    properties:
+      author:
+        $ref: '#/definitions/search.SearchAnchorAuthor'
+      cloneCount:
+        type: integer
+      commentCount:
+        type: integer
+      createdAt:
+        type: string
+      description:
+        type: string
+      engagementScore:
+        type: integer
+      id:
+        type: string
+      itemCount:
+        type: integer
+      likeCount:
+        type: integer
+      tags:
+        items:
+          type: string
+        type: array
+      title:
+        type: string
+      visibility:
+        type: string
+    type: object
+  search.SearchUserResult:
+    properties:
+      anchorCount:
+        type: integer
+      bio:
+        type: string
+      displayName:
+        type: string
+      followerCount:
+        type: integer
+      id:
+        type: string
+      isFollowing:
+        type: boolean
+      isVerified:
+        type: boolean
+      profilePicture:
+        type: string
+      username:
+        type: string
+    type: object
+  search.TagResult:
+    properties:
+      count:
+        type: integer
+      name:
+        type: string
+    type: object
+  search.TagSearchResponse:
+    properties:
+      query:
+        type: string
+      tags:
+        items:
+          $ref: '#/definitions/search.TagResult'
+        type: array
+    type: object
+  search.UnifiedSearchAnchorsResult:
+    properties:
+      hasMore:
+        type: boolean
+      items:
+        items:
+          $ref: '#/definitions/search.SearchAnchorResult'
+        type: array
+      total:
+        type: integer
+    type: object
+  search.UnifiedSearchResponse:
+    properties:
+      anchors:
+        $ref: '#/definitions/search.UnifiedSearchAnchorsResult'
+      query:
+        type: string
+      users:
+        $ref: '#/definitions/search.UnifiedSearchUsersResult'
+    type: object
+  search.UnifiedSearchUsersResult:
+    properties:
+      hasMore:
+        type: boolean
+      items:
+        items:
+          $ref: '#/definitions/search.SearchUserResult'
+        type: array
+      total:
+        type: integer
+    type: object
+  search.UserSearchMeta:
+    properties:
+      query:
+        type: string
+    type: object
 host: localhost:8080
 info:
   contact: {}
@@ -417,17 +1160,18 @@ info:
 paths:
   /anchors:
     get:
-      description: List anchors for a user
+      description: List anchors for a user (public/unlisted)
       parameters:
-      - description: User ID (defaults to authenticated user)
+      - description: User ID
         in: query
         name: userId
+        required: true
         type: string
-      - description: Page number (default 1)
+      - description: Page number
         in: query
         name: page
         type: integer
-      - description: Items per page (default 20, max 50)
+      - description: Limit per page
         in: query
         name: limit
         type: integer
@@ -443,17 +1187,13 @@ paths:
                 data:
                   $ref: '#/definitions/anchors.PaginatedResponse'
               type: object
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/response.APIResponse'
-      summary: List anchors
+      summary: List user anchors
       tags:
       - anchors
     post:
       consumes:
       - application/json
-      description: Create a new anchor collection
+      description: Create a new anchor for the authenticated user
       parameters:
       - description: Anchor details
         in: body
@@ -512,11 +1252,11 @@ paths:
             $ref: '#/definitions/response.APIResponse'
       security:
       - BearerAuth: []
-      summary: Delete anchor
+      summary: Delete an anchor
       tags:
       - anchors
     get:
-      description: Get a specific anchor with its items
+      description: Get anchor details and items
       parameters:
       - description: Anchor ID
         in: path
@@ -535,15 +1275,11 @@ paths:
                 data:
                   $ref: '#/definitions/anchors.AnchorWithItemsResponse'
               type: object
-        "403":
-          description: Forbidden
-          schema:
-            $ref: '#/definitions/response.APIResponse'
         "404":
           description: Not Found
           schema:
             $ref: '#/definitions/response.APIResponse'
-      summary: Get anchor by ID
+      summary: Get anchor details
       tags:
       - anchors
     patch:
@@ -556,7 +1292,7 @@ paths:
         name: id
         required: true
         type: string
-      - description: Update fields
+      - description: Update details
         in: body
         name: request
         required: true
@@ -588,29 +1324,41 @@ paths:
             $ref: '#/definitions/response.APIResponse'
       security:
       - BearerAuth: []
-      summary: Update anchor
+      summary: Update an anchor
       tags:
       - anchors
-  /anchors/{id}/clone:
-    post:
-      description: Create a deep copy of an anchor and all its items to your account
+  /anchors/{id}/comments:
+    get:
+      description: Get paginated list of comments
       parameters:
-      - description: Anchor ID to clone
+      - description: Anchor ID
         in: path
         name: id
         required: true
         type: string
+      - description: Page number (default 1)
+        in: query
+        name: page
+        type: integer
+      - description: Items per page (default 20, max 50)
+        in: query
+        name: limit
+        type: integer
+      - description: 'Sort: newest, oldest, top (default newest)'
+        in: query
+        name: sort
+        type: string
       produces:
       - application/json
       responses:
-        "201":
-          description: Created
+        "200":
+          description: OK
           schema:
             allOf:
             - $ref: '#/definitions/response.APIResponse'
             - properties:
                 data:
-                  $ref: '#/definitions/anchors.Anchor'
+                  $ref: '#/definitions/comments.PaginatedCommentsResponse'
               type: object
         "400":
           description: Bad Request
@@ -624,14 +1372,185 @@ paths:
           description: Not Found
           schema:
             $ref: '#/definitions/response.APIResponse'
+      summary: List comments for anchor
+      tags:
+      - comments
+    post:
+      consumes:
+      - application/json
+      description: Add a new comment with @mention support
+      parameters:
+      - description: Anchor ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Comment content
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/comments.CreateCommentRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/comments.CommentResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
       security:
       - BearerAuth: []
-      summary: Clone an anchor
+      summary: Add comment to anchor
       tags:
-      - anchors
-  /anchors/{id}/items:
+      - comments
+  /anchors/{id}/like:
+    post:
+      consumes:
+      - application/json
+      description: Like or unlike an anchor based on the action specified
+      parameters:
+      - description: Anchor ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Like action
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/likes.LikeActionRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/likes.LikeActionResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Like or unlike anchor
+      tags:
+      - likes
+  /anchors/{id}/like/status:
     get:
-      description: Get paginated list of items in an anchor
+      description: Check if the current user has liked the anchor
+      parameters:
+      - description: Anchor ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/likes.LikeStatusResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Check like status
+      tags:
+      - likes
+  /anchors/{id}/like/summary:
+    get:
+      description: Get summary of who liked an anchor, prioritizing users you follow
+      parameters:
+      - description: Anchor ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/likes.LikeSummaryResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      summary: Get like summary for anchor
+      tags:
+      - likes
+  /anchors/{id}/likes:
+    get:
+      description: Get paginated list of users who liked the anchor
       parameters:
       - description: Anchor ID
         in: path
@@ -656,7 +1575,7 @@ paths:
             - $ref: '#/definitions/response.APIResponse'
             - properties:
                 data:
-                  $ref: '#/definitions/anchors.PaginatedResponse'
+                  $ref: '#/definitions/likes.PaginatedLikersResponse'
               type: object
         "400":
           description: Bad Request
@@ -670,194 +1589,25 @@ paths:
           description: Not Found
           schema:
             $ref: '#/definitions/response.APIResponse'
-      summary: List items in anchor
+      summary: List users who liked anchor
       tags:
-      - anchors
-    post:
-      consumes:
-      - application/json
-      description: Add a new item (URL or text) to an anchor. For URL items, metadata
-        (title, description, favicon, thumbnail) is automatically fetched.
-      parameters:
-      - description: Anchor ID
-        in: path
-        name: id
-        required: true
-        type: string
-      - description: Item details
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/anchors.AddItemRequest'
-      produces:
-      - application/json
-      responses:
-        "201":
-          description: Created
-          schema:
-            allOf:
-            - $ref: '#/definitions/response.APIResponse'
-            - properties:
-                data:
-                  $ref: '#/definitions/anchors.Item'
-              type: object
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/response.APIResponse'
-        "403":
-          description: Forbidden
-          schema:
-            $ref: '#/definitions/response.APIResponse'
-      security:
-      - BearerAuth: []
-      summary: Add item to anchor
-      tags:
-      - anchors
-  /anchors/{id}/items/{itemId}:
-    delete:
-      description: Remove an item from an anchor
-      parameters:
-      - description: Anchor ID
-        in: path
-        name: id
-        required: true
-        type: string
-      - description: Item ID
-        in: path
-        name: itemId
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/response.APIResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/response.APIResponse'
-        "403":
-          description: Forbidden
-          schema:
-            $ref: '#/definitions/response.APIResponse'
-      security:
-      - BearerAuth: []
-      summary: Delete item from anchor
-      tags:
-      - anchors
-  /anchors/{id}/items/reorder:
-    patch:
-      consumes:
-      - application/json
-      description: Update the position of items within an anchor. All item IDs must
-        be provided in the new desired order.
-      parameters:
-      - description: Anchor ID
-        in: path
-        name: id
-        required: true
-        type: string
-      - description: Array of item IDs in new order
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/anchors.ReorderItemsRequest'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            allOf:
-            - $ref: '#/definitions/response.APIResponse'
-            - properties:
-                data:
-                  items:
-                    $ref: '#/definitions/anchors.Item'
-                  type: array
-              type: object
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/response.APIResponse'
-        "403":
-          description: Forbidden
-          schema:
-            $ref: '#/definitions/response.APIResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/response.APIResponse'
-      security:
-      - BearerAuth: []
-      summary: Reorder items in anchor
-      tags:
-      - anchors
-  /anchors/{id}/items/upload:
-    post:
-      consumes:
-      - multipart/form-data
-      description: Upload a file (image, audio, or generic file) and add it as an
-        item
-      parameters:
-      - description: Anchor ID
-        in: path
-        name: id
-        required: true
-        type: string
-      - description: Item type (image, audio, file)
-        in: formData
-        name: type
-        required: true
-        type: string
-      - description: File to upload
-        in: formData
-        name: file
-        required: true
-        type: file
-      produces:
-      - application/json
-      responses:
-        "201":
-          description: Created
-          schema:
-            allOf:
-            - $ref: '#/definitions/response.APIResponse'
-            - properties:
-                data:
-                  $ref: '#/definitions/anchors.Item'
-              type: object
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/response.APIResponse'
-        "403":
-          description: Forbidden
-          schema:
-            $ref: '#/definitions/response.APIResponse'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/response.APIResponse'
-      security:
-      - BearerAuth: []
-      summary: Upload and add item to anchor
-      tags:
-      - anchors
+      - likes
   /anchors/{id}/pin:
     patch:
-      description: Pin or unpin an anchor
+      responses: {}
+      summary: Toggle pin status
+  /auth/dev-login:
+    post:
+      consumes:
+      - application/json
+      description: Login without Google OAuth - FOR DEVELOPMENT/TESTING ONLY
       parameters:
-      - description: Anchor ID
-        in: path
-        name: id
+      - description: Dev login request
+        in: body
+        name: request
         required: true
-        type: string
+        schema:
+          $ref: '#/definitions/auth.DevLoginRequest'
       produces:
       - application/json
       responses:
@@ -868,7 +1618,7 @@ paths:
             - $ref: '#/definitions/response.APIResponse'
             - properties:
                 data:
-                  $ref: '#/definitions/anchors.Anchor'
+                  $ref: '#/definitions/auth.LoginResponse'
               type: object
         "400":
           description: Bad Request
@@ -878,11 +1628,9 @@ paths:
           description: Forbidden
           schema:
             $ref: '#/definitions/response.APIResponse'
-      security:
-      - BearerAuth: []
-      summary: Toggle pin status
+      summary: Dev login (DEVELOPMENT ONLY)
       tags:
-      - anchors
+      - auth
   /auth/google:
     post:
       consumes:
@@ -942,43 +1690,6 @@ paths:
       summary: Get current user
       tags:
       - auth
-  /auth/profile:
-    patch:
-      consumes:
-      - application/json
-      description: Update display name and/or bio
-      parameters:
-      - description: Profile updates
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/auth.UpdateProfileRequest'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            allOf:
-            - $ref: '#/definitions/response.APIResponse'
-            - properties:
-                data:
-                  $ref: '#/definitions/auth.User'
-              type: object
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/response.APIResponse'
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/response.APIResponse'
-      security:
-      - BearerAuth: []
-      summary: Update user profile
-      tags:
-      - auth
   /auth/username:
     patch:
       consumes:
@@ -1016,6 +1727,607 @@ paths:
       summary: Update username
       tags:
       - auth
+  /comments/{id}:
+    delete:
+      description: Delete own comment or any comment on own anchor
+      parameters:
+      - description: Comment ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Delete comment
+      tags:
+      - comments
+    get:
+      description: Get comment by ID
+      parameters:
+      - description: Comment ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/comments.CommentResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      summary: Get single comment
+      tags:
+      - comments
+    patch:
+      consumes:
+      - application/json
+      description: Edit own comment
+      parameters:
+      - description: Comment ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Updated content
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/comments.UpdateCommentRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/comments.CommentResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Edit comment
+      tags:
+      - comments
+  /comments/{id}/like:
+    post:
+      consumes:
+      - application/json
+      description: Toggle like on a comment
+      parameters:
+      - description: Comment ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Like action
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/comments.CommentLikeActionRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/comments.CommentLikeResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Like or unlike comment
+      tags:
+      - comments
+  /comments/{id}/like/status:
+    get:
+      description: Check if user has liked a comment
+      parameters:
+      - description: Comment ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/comments.CommentLikeResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Get comment like status
+      tags:
+      - comments
+  /feed/discover:
+    get:
+      description: Get discovery feed of trending/popular public anchors from non-followed
+        users
+      parameters:
+      - description: Items per page (default 20, max 50)
+        in: query
+        name: limit
+        type: integer
+      - description: Pagination cursor
+        in: query
+        name: cursor
+        type: string
+      - description: 'Category: trending, popular, recent (default trending)'
+        in: query
+        name: category
+        type: string
+      - description: Filter by tag
+        in: query
+        name: tag
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/feed.DiscoverResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      summary: Get discovery feed
+      tags:
+      - feed
+  /feed/following:
+    get:
+      description: Get personalized feed of anchors from followed users
+      parameters:
+      - description: Items per page (default 20, max 50)
+        in: query
+        name: limit
+        type: integer
+      - description: Pagination cursor
+        in: query
+        name: cursor
+        type: string
+      - description: Include own anchors (default true)
+        in: query
+        name: includeOwn
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/feed.FeedResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Get home feed
+      tags:
+      - feed
+  /notifications:
+    get:
+      description: Get paginated list of user's notifications
+      parameters:
+      - description: Page number (default 1)
+        in: query
+        name: page
+        type: integer
+      - description: Items per page (default 20, max 50)
+        in: query
+        name: limit
+        type: integer
+      - description: Only show unread
+        in: query
+        name: unreadOnly
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/notifications.PaginatedNotificationsResponse'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: List notifications
+      tags:
+      - notifications
+  /notifications/{id}/read:
+    patch:
+      description: Mark a single notification as read
+      parameters:
+      - description: Notification ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/notifications.MarkReadResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Mark notification as read
+      tags:
+      - notifications
+  /notifications/read-all:
+    patch:
+      description: Mark all user's notifications as read
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/notifications.MarkAllReadResponse'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Mark all notifications as read
+      tags:
+      - notifications
+  /notifications/unread-count:
+    get:
+      description: Get count of unread notifications
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/notifications.UnreadCountResponse'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Get unread notification count
+      tags:
+      - notifications
+  /search:
+    get:
+      description: Search across anchors and users
+      parameters:
+      - description: Search query (min 2 chars)
+        in: query
+        name: q
+        required: true
+        type: string
+      - description: 'Type: all, anchors, users (default all)'
+        in: query
+        name: type
+        type: string
+      - description: Results per type (default 10, max 20)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/search.UnifiedSearchResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      summary: Unified search
+      tags:
+      - search
+  /search/anchors:
+    get:
+      description: Search anchors with filters and pagination
+      parameters:
+      - description: Search query (min 2 chars)
+        in: query
+        name: q
+        required: true
+        type: string
+      - description: Filter by tag
+        in: query
+        name: tag
+        type: string
+      - description: 'Sort: relevant, recent, popular (default relevant)'
+        in: query
+        name: sort
+        type: string
+      - description: Page number (default 1)
+        in: query
+        name: page
+        type: integer
+      - description: Items per page (default 20, max 50)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/search.PaginatedAnchorSearchResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      summary: Search anchors
+      tags:
+      - search
+  /search/tags:
+    get:
+      description: Get tag suggestions based on prefix
+      parameters:
+      - description: Tag prefix (min 1 char)
+        in: query
+        name: q
+        required: true
+        type: string
+      - description: Max suggestions (default 10, max 20)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/search.TagSearchResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      summary: Tag autocomplete
+      tags:
+      - search
+  /search/users:
+    get:
+      description: Search users with pagination
+      parameters:
+      - description: Search query (min 2 chars)
+        in: query
+        name: q
+        required: true
+        type: string
+      - description: Page number (default 1)
+        in: query
+        name: page
+        type: integer
+      - description: Items per page (default 20, max 50)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/search.PaginatedUserSearchResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      summary: Search users
+      tags:
+      - search
+  /users/{id}:
+    get:
+      description: Get a user's public profile by ID
+      parameters:
+      - description: User ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/auth.PublicProfileResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      summary: Get public profile
+      tags:
+      - users
   /users/{id}/follow:
     post:
       consumes:
@@ -1146,6 +2458,208 @@ paths:
       summary: List followers or following
       tags:
       - follows
+  /users/{id}/pinned:
+    get:
+      description: Get pinned anchors for a specific user
+      parameters:
+      - description: User ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/auth.PinnedAnchorResponse'
+                  type: array
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      summary: Get pinned anchors
+      tags:
+      - users
+  /users/me:
+    get:
+      description: Get the authenticated user's complete profile
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/auth.OwnProfileResponse'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Get own profile
+      tags:
+      - users
+    patch:
+      consumes:
+      - application/json
+      description: Update display name and/or bio
+      parameters:
+      - description: Profile updates
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/auth.UpdateProfileRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/auth.OwnProfileResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Update user profile
+      tags:
+      - users
+  /users/me/cover-image:
+    delete:
+      description: Remove the current user's cover image
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Remove cover image
+      tags:
+      - users
+    post:
+      consumes:
+      - multipart/form-data
+      description: Upload a new cover image (max 10MB)
+      parameters:
+      - description: Cover image file
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/auth.CoverImageResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Upload cover image
+      tags:
+      - users
+  /users/me/profile-picture:
+    delete:
+      description: Remove the current user's profile picture
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Remove profile picture
+      tags:
+      - users
+    post:
+      consumes:
+      - multipart/form-data
+      description: Upload a new profile picture (max 5MB)
+      parameters:
+      - description: Profile picture file
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/auth.ProfilePictureResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Upload profile picture
+      tags:
+      - users
 schemes:
 - http
 securityDefinitions:

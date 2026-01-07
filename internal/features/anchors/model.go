@@ -40,10 +40,12 @@ type Anchor struct {
 	CommentCount       int                 `bson:"commentCount" json:"commentCount"`
 	ViewCount          int                 `bson:"viewCount" json:"viewCount"`
 	ItemCount          int                 `bson:"itemCount" json:"itemCount"`
-	CreatedAt          time.Time           `bson:"createdAt" json:"createdAt"`
-	UpdatedAt          time.Time           `bson:"updatedAt" json:"updatedAt"`
-	LastItemAddedAt    time.Time           `bson:"lastItemAddedAt" json:"lastItemAddedAt"`
-	DeletedAt          *time.Time          `bson:"deletedAt,omitempty" json:"deletedAt,omitempty"`
+	EngagementScore    int                 `bson:"engagementScore" json:"engagementScore"`
+
+	CreatedAt       time.Time  `bson:"createdAt" json:"createdAt"`
+	UpdatedAt       time.Time  `bson:"updatedAt" json:"updatedAt"`
+	LastItemAddedAt time.Time  `bson:"lastItemAddedAt" json:"lastItemAddedAt"`
+	DeletedAt       *time.Time `bson:"deletedAt,omitempty" json:"deletedAt,omitempty"`
 }
 
 // Item represents a single content item within an anchor
@@ -140,8 +142,9 @@ type AnchorResponse struct {
 
 // AnchorWithItemsResponse represents an anchor with its items
 type AnchorWithItemsResponse struct {
-	Anchor Anchor `json:"anchor"`
-	Items  []Item `json:"items"`
+	Anchor      Anchor      `json:"anchor"`
+	Items       []Item      `json:"items"`
+	LikeSummary interface{} `json:"likeSummary,omitempty"`
 }
 
 // ItemResponse represents the response for a single item

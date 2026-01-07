@@ -1,28 +1,32 @@
 package follows
 
 import (
+	"context"
 	"math"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xyz-asif/gotodo/internal/config"
 	"github.com/xyz-asif/gotodo/internal/features/auth"
+	"github.com/xyz-asif/gotodo/internal/features/notifications" // Already present, but good to confirm
 	"github.com/xyz-asif/gotodo/internal/pkg/response"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // Handler handles follow-related HTTP requests
 type Handler struct {
-	repo     *Repository
-	authRepo *auth.Repository
-	config   *config.Config
+	repo                *Repository
+	authRepo            *auth.Repository
+	notificationService *notifications.Service // Added
+	config              *config.Config
 }
 
 // NewHandler creates a new follow handler
-func NewHandler(repo *Repository, authRepo *auth.Repository, cfg *config.Config) *Handler {
+func NewHandler(repo *Repository, authRepo *auth.Repository, notificationService *notifications.Service, cfg *config.Config) *Handler { // Modified
 	return &Handler{
-		repo:     repo,
-		authRepo: authRepo,
-		config:   cfg,
+		repo:                repo,
+		authRepo:            authRepo,
+		notificationService: notificationService, // Added
+		config:              cfg,
 	}
 }
 
@@ -86,20 +90,28 @@ func (h *Handler) FollowAction(c *gin.Context) {
 	var isFollowing bool
 
 	if req.Action == "follow" {
-		// Create follow relationship (idempotent)
-		err = h.repo.CreateFollow(c.Request.Context(), currentUser.ID, targetID)
+		// Check if already following (to prevent duplicate notifications)
+		wasAlreadyFollowing, _ := h.repo.ExistsFollow(c.Request.Context(), currentUser.ID, targetID) // Changed targetUserID to targetID
+
+		err = h.repo.CreateFollow(c.Request.Context(), currentUser.ID, targetID) // Changed targetUserID to targetID
 		if err != nil {
 			response.InternalServerError(c, "FOLLOW_FAILED", "Failed to follow user")
 			return
 		}
 
-		// Check if it was actually created (not already existing)
-		wasCreated := err == nil
-		if wasCreated {
-			// Increment target's follower count
-			_ = h.authRepo.IncrementFollowerCount(c.Request.Context(), targetID, 1)
-			// Increment current user's following count
+		// Only update counts and notify if this is a NEW follow
+		if !wasAlreadyFollowing {
+			_ = h.authRepo.IncrementFollowerCount(c.Request.Context(), targetID, 1) // Changed targetUserID to targetID
 			_ = h.authRepo.IncrementFollowingCount(c.Request.Context(), currentUser.ID, 1)
+
+			// Create notification (async)
+			go func() {
+				_ = h.notificationService.CreateFollowNotification(
+					context.Background(),
+					currentUser.ID,
+					targetID, // Changed targetUserID to targetID
+				)
+			}()
 		}
 
 		isFollowing = true

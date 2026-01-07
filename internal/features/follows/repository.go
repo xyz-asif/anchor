@@ -209,3 +209,52 @@ func (r *Repository) GetFollowingIDs(ctx context.Context, userID primitive.Objec
 
 	return result, nil
 }
+
+// GetAllFollowingIDs returns all user IDs that the given user follows
+func (r *Repository) GetAllFollowingIDs(ctx context.Context, userID primitive.ObjectID) ([]primitive.ObjectID, error) {
+	filter := bson.M{"followerId": userID}
+
+	cursor, err := r.collection.Find(ctx, filter, options.Find().SetProjection(bson.M{"followingId": 1}))
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var follows []Follow
+	if err = cursor.All(ctx, &follows); err != nil {
+		return nil, err
+	}
+
+	ids := make([]primitive.ObjectID, len(follows))
+	for i, f := range follows {
+		ids[i] = f.FollowingID
+	}
+
+	return ids, nil
+}
+
+// GetFollowingStatus batch checks if user is following multiple users
+func (r *Repository) GetFollowingStatus(ctx context.Context, followerID primitive.ObjectID, followingIDs []primitive.ObjectID) (map[primitive.ObjectID]bool, error) {
+	if len(followingIDs) == 0 {
+		return make(map[primitive.ObjectID]bool), nil
+	}
+
+	cursor, err := r.collection.Find(ctx, bson.M{
+		"followerId":  followerID,
+		"followingId": bson.M{"$in": followingIDs},
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	result := make(map[primitive.ObjectID]bool)
+	for cursor.Next(ctx) {
+		var follow Follow
+		if err := cursor.Decode(&follow); err == nil {
+			result[follow.FollowingID] = true
+		}
+	}
+
+	return result, nil
+}

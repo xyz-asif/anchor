@@ -23,6 +23,7 @@ type Config struct {
 	CloudinaryAPISecret        string
 	CloudinaryUploadFolder     string
 	FrontendURL                string
+	DevMode                    bool
 }
 
 func Load() *Config {
@@ -47,6 +48,7 @@ func Load() *Config {
 		CloudinaryAPISecret:        getEnv("CLOUDINARY_API_SECRET", ""),
 		CloudinaryUploadFolder:     getEnv("CLOUDINARY_UPLOAD_FOLDER", "anchor"),
 		FrontendURL:                getEnv("FRONTEND_URL", "http://localhost:3000"),
+		DevMode:                    getEnv("DEV_MODE", "false") == "true",
 	}
 }
 

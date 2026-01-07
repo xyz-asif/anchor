@@ -40,6 +40,40 @@ func NewRepository(db *mongo.Database) *Repository {
 			Keys:    bson.D{{Key: "deletedAt", Value: 1}},
 			Options: options.Index().SetSparse(true),
 		},
+		{
+			// Discovery feed index
+			Keys: bson.D{
+				{Key: "visibility", Value: 1},
+				{Key: "deletedAt", Value: 1},
+				{Key: "engagementScore", Value: -1},
+				{Key: "createdAt", Value: -1},
+				{Key: "_id", Value: -1},
+			},
+		},
+		{
+			// Discovery with tag filter
+			Keys: bson.D{
+				{Key: "visibility", Value: 1},
+				{Key: "deletedAt", Value: 1},
+				{Key: "tags", Value: 1},
+				{Key: "engagementScore", Value: -1},
+			},
+		},
+		{
+			// Text index for search
+			Keys: bson.D{
+				{Key: "title", Value: "text"},
+				{Key: "description", Value: "text"},
+				{Key: "tags", Value: "text"},
+			},
+			Options: options.Index().
+				SetWeights(bson.D{
+					{Key: "title", Value: 10},
+					{Key: "tags", Value: 5},
+					{Key: "description", Value: 1},
+				}).
+				SetName("anchor_text_search"),
+		},
 	})
 
 	// Create indexes for items collection
@@ -382,4 +416,128 @@ func (r *Repository) CountAnchorItems(ctx context.Context, anchorID primitive.Ob
 	}
 
 	return count, nil
+}
+
+// IncrementLikeCount increments or decrements an anchor's like count
+func (r *Repository) IncrementLikeCount(ctx context.Context, anchorID primitive.ObjectID, delta int) error {
+	filter := bson.M{"_id": anchorID}
+	update := bson.M{
+		"$inc": bson.M{"likeCount": delta},
+		"$set": bson.M{"updatedAt": time.Now()},
+	}
+
+	_, err := r.anchorsCollection.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return err
+	}
+
+	// If decrementing, ensure count doesn't go negative
+	if delta < 0 {
+		// Fix negative count if it occurred
+		_, _ = r.anchorsCollection.UpdateOne(ctx,
+			bson.M{"_id": anchorID, "likeCount": bson.M{"$lt": 0}},
+			bson.M{"$set": bson.M{"likeCount": 0}},
+		)
+	}
+
+	return nil
+}
+
+// GetPinnedAnchors retrieves pinned anchors for a specific user
+func (r *Repository) GetPinnedAnchors(ctx context.Context, userID primitive.ObjectID, includePrivate bool) ([]Anchor, error) {
+	filter := bson.M{
+		"userId":    userID,
+		"isPinned":  true,
+		"deletedAt": nil,
+	}
+
+	if !includePrivate {
+		filter["visibility"] = bson.M{"$in": []string{VisibilityPublic, VisibilityUnlisted}}
+	}
+
+	opts := options.Find().
+		SetSort(bson.D{{Key: "createdAt", Value: -1}}).
+		SetLimit(3)
+
+	cursor, err := r.anchorsCollection.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var anchors []Anchor
+	if err = cursor.All(ctx, &anchors); err != nil {
+		return nil, err
+	}
+
+	return anchors, nil
+}
+
+// UpdateEngagementScore recalculates and updates the engagement score of an anchor
+func (r *Repository) UpdateEngagementScore(ctx context.Context, anchorID primitive.ObjectID) error {
+	anchor, err := r.GetAnchorByID(ctx, anchorID)
+	if err != nil {
+		return err
+	}
+
+	// Calculate: (likes * 2) + (clones * 3) + (comments * 1)
+	score := (anchor.LikeCount * 2) + (anchor.CloneCount * 3) + (anchor.CommentCount * 1)
+
+	return r.UpdateAnchor(ctx, anchorID, bson.M{
+		"engagementScore": score,
+		"updatedAt":       time.Now(),
+	})
+}
+
+// IncrementCommentCount increments/decrements anchor's comment count
+func (r *Repository) IncrementCommentCount(ctx context.Context, anchorID primitive.ObjectID, delta int) error {
+	filter := bson.M{"_id": anchorID}
+	update := bson.M{
+		"$inc": bson.M{"commentCount": delta},
+		"$set": bson.M{"updatedAt": time.Now()},
+	}
+
+	_, err := r.anchorsCollection.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return err
+	}
+
+	// Ensure count doesn't go negative
+	if delta < 0 {
+		_, _ = r.anchorsCollection.UpdateOne(ctx,
+			bson.M{"_id": anchorID, "commentCount": bson.M{"$lt": 0}},
+			bson.M{"$set": bson.M{"commentCount": 0}},
+		)
+	}
+
+	return nil
+}
+
+// GetAnchorTitles batch fetches titles for a list of anchor IDs
+func (r *Repository) GetAnchorTitles(ctx context.Context, anchorIDs []primitive.ObjectID) (map[primitive.ObjectID]string, error) {
+	if len(anchorIDs) == 0 {
+		return make(map[primitive.ObjectID]string), nil
+	}
+
+	filter := bson.M{"_id": bson.M{"$in": anchorIDs}}
+	projection := bson.M{"title": 1}
+
+	cursor, err := r.anchorsCollection.Find(ctx, filter, options.Find().SetProjection(projection))
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	result := make(map[primitive.ObjectID]string)
+	for cursor.Next(ctx) {
+		var doc struct {
+			ID    primitive.ObjectID `bson:"_id"`
+			Title string             `bson:"title"`
+		}
+		if err := cursor.Decode(&doc); err == nil {
+			result[doc.ID] = doc.Title
+		}
+	}
+
+	return result, nil
 }

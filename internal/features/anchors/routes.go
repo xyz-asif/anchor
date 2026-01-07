@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/xyz-asif/gotodo/internal/config"
 	"github.com/xyz-asif/gotodo/internal/features/auth"
+	"github.com/xyz-asif/gotodo/internal/features/notifications"
 	"github.com/xyz-asif/gotodo/internal/middleware"
 	"github.com/xyz-asif/gotodo/internal/pkg/cloudinary"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -16,6 +17,7 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Con
 	// Initialize repositories
 	repo := NewRepository(db)
 	authRepo := auth.NewRepository(db)
+	notificationService := notifications.GetService(db)
 
 	// Initialize Cloudinary service
 	cloudinarySvc, err := cloudinary.NewService(cfg.CloudinaryCloudName, cfg.CloudinaryAPIKey, cfg.CloudinaryAPISecret, "anchors")
@@ -23,8 +25,8 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Con
 		log.Printf("Failed to initialize cloudinary service: %v", err)
 	}
 
-	// Initialize handler
-	handler := NewHandler(repo, authRepo, cfg, cloudinarySvc)
+	// Initialize handler (repos passed as nil to avoid import cycles)
+	handler := NewHandler(repo, authRepo, notificationService, cfg, cloudinarySvc, nil, nil)
 
 	// Initialize auth middleware
 	authMiddleware := middleware.NewAuthMiddleware(authRepo, cfg)

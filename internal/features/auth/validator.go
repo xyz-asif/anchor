@@ -2,77 +2,101 @@ package auth
 
 import (
 	"errors"
+	"mime/multipart"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
 
-var (
-	usernameRegex = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
-)
-
-// ValidateUsername checks if the username format is valid
-func ValidateUsername(username string) error {
-	username = strings.TrimSpace(username)
-
-	// Convert to lowercase for consistent validation
-	username = strings.ToLower(username)
-
-	if len(username) < 3 || len(username) > 20 {
-		return errors.New("username must be between 3 and 20 characters")
+// ValidateUpdateProfileRequest validates the profile update request
+func ValidateUpdateProfileRequest(req *UpdateProfileRequest) error {
+	if req.DisplayName != nil {
+		if err := ValidateDisplayName(*req.DisplayName); err != nil {
+			return err
+		}
 	}
 
-	if !usernameRegex.MatchString(username) {
-		return errors.New("username must start with a letter and contain only letters, numbers, underscores, or hyphens")
+	if req.Bio != nil {
+		if err := ValidateBio(*req.Bio); err != nil {
+			return err
+		}
 	}
 
 	return nil
 }
 
-// ValidateDisplayName checks if the display name is valid
-func ValidateDisplayName(name string) error {
-	name = strings.TrimSpace(name)
-
-	if len(name) < 3 || len(name) > 50 {
-		return errors.New("display name must be between 3 and 50 characters")
+// ValidateDisplayName validates the display name
+func ValidateDisplayName(displayName string) error {
+	if len(displayName) < 2 || len(displayName) > 50 {
+		return errors.New("display name must be between 2 and 50 characters")
 	}
-
 	return nil
 }
 
-// ValidateBio checks if the bio length is valid
+// ValidateBio validates the bio
 func ValidateBio(bio string) error {
-	bio = strings.TrimSpace(bio)
+	if len(bio) > 200 {
+		return errors.New("bio must not exceed 200 characters")
+	}
+	return nil
+}
 
-	if len(bio) > 160 {
-		return errors.New("bio cannot exceed 160 characters")
+// ValidateUsername validates the username format
+func ValidateUsername(username string) error {
+	if len(username) < 3 || len(username) > 30 {
+		return errors.New("username must be between 3 and 30 characters")
+	}
+
+	// Alphanumeric and underscores only
+	match, _ := regexp.MatchString("^[a-zA-Z0-9_]+$", username)
+	if !match {
+		return errors.New("username can only contain letters, numbers, and underscores")
+	}
+	return nil
+}
+
+// ValidateProfilePicture validates the profile picture file
+func ValidateProfilePicture(file *multipart.FileHeader) error {
+	// Check file size (max 5MB)
+	if file.Size > 5*1024*1024 {
+		return errors.New("profile picture must be less than 5MB")
+	}
+
+	// Check file extension
+	ext := strings.ToLower(filepath.Ext(file.Filename))
+	validExts := map[string]bool{
+		".jpg":  true,
+		".jpeg": true,
+		".png":  true,
+		".webp": true,
+	}
+
+	if !validExts[ext] {
+		return errors.New("invalid file type. allowed: jpg, jpeg, png, webp")
 	}
 
 	return nil
 }
 
-// GenerateUniqueUsername creates a base username from a name string
-// Note: Uniqueness is not guaranteed by this function alone, it just formats the string
-func GenerateUniqueUsername(name string) string {
-	// Remove spaces and special characters, keep only alphanumeric
-	reg := regexp.MustCompile(`[^a-zA-Z0-9]+`)
-	username := reg.ReplaceAllString(name, "")
-
-	username = strings.ToLower(username)
-
-	// Ensure it's not empty and doesn't start with a number
-	if username == "" || (len(username) > 0 && username[0] >= '0' && username[0] <= '9') {
-		username = "user" + username
+// ValidateCoverImage validates the cover image file
+func ValidateCoverImage(file *multipart.FileHeader) error {
+	// Check file size (max 10MB)
+	if file.Size > 10*1024*1024 {
+		return errors.New("cover image must be less than 10MB")
 	}
 
-	// Truncate if too long (leave room for suffix numbers if needed)
-	if len(username) > 15 {
-		username = username[:15]
+	// Check file extension
+	ext := strings.ToLower(filepath.Ext(file.Filename))
+	validExts := map[string]bool{
+		".jpg":  true,
+		".jpeg": true,
+		".png":  true,
+		".webp": true,
 	}
 
-	// Ensure minimum length
-	if len(username) < 3 {
-		username = username + "dev"
+	if !validExts[ext] {
+		return errors.New("invalid file type. allowed: jpg, jpeg, png, webp")
 	}
 
-	return username
+	return nil
 }

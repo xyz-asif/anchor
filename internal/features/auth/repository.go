@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -34,6 +35,21 @@ func NewRepository(db *mongo.Database) *Repository {
 		{
 			Keys:    bson.D{{Key: "username", Value: 1}},
 			Options: options.Index().SetUnique(true),
+		},
+		{
+			// Text index for search
+			Keys: bson.D{
+				{Key: "username", Value: "text"},
+				{Key: "displayName", Value: "text"},
+				{Key: "bio", Value: "text"},
+			},
+			Options: options.Index().
+				SetWeights(bson.D{
+					{Key: "username", Value: 10},
+					{Key: "displayName", Value: 5},
+					{Key: "bio", Value: 1},
+				}).
+				SetName("user_text_search"),
 		},
 	})
 
@@ -229,4 +245,62 @@ func (r *Repository) GetUsersByIDs(ctx context.Context, userIDs []primitive.Obje
 	}
 
 	return users, nil
+}
+
+// GetUserByObjectID finds a user by their ObjectID directly
+func (r *Repository) GetUserByObjectID(ctx context.Context, userID primitive.ObjectID) (*User, error) {
+	var user User
+	err := r.collection.FindOne(ctx, bson.M{"_id": userID}).Decode(&user)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, errors.New("user not found")
+		}
+		return nil, err
+	}
+	return &user, nil
+}
+
+// GetUsersByUsernames retrieves users by their usernames (for mention validation)
+func (r *Repository) GetUsersByUsernames(ctx context.Context, usernames []string) ([]User, error) {
+	if len(usernames) == 0 {
+		return []User{}, nil
+	}
+
+	// Normalize to lowercase
+	normalizedUsernames := make([]string, len(usernames))
+	for i, u := range usernames {
+		normalizedUsernames[i] = strings.ToLower(u)
+	}
+
+	filter := bson.M{
+		"username": bson.M{"$in": normalizedUsernames},
+	}
+
+	cursor, err := r.collection.Find(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var users []User
+	if err = cursor.All(ctx, &users); err != nil {
+		return nil, err
+	}
+
+	return users, nil
+}
+
+// GetUserIDsByUsernames returns map of username -> userID for valid usernames
+func (r *Repository) GetUserIDsByUsernames(ctx context.Context, usernames []string) (map[string]primitive.ObjectID, error) {
+	users, err := r.GetUsersByUsernames(ctx, usernames)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]primitive.ObjectID)
+	for _, user := range users {
+		result[strings.ToLower(user.Username)] = user.ID
+	}
+
+	return result, nil
 }
