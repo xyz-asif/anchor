@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/xyz-asif/gotodo/internal/config"
 	"github.com/xyz-asif/gotodo/internal/pkg/cloudinary"
+	idToken "github.com/xyz-asif/gotodo/internal/pkg/jwt"
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
@@ -36,6 +37,9 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Con
 	{
 		auth.POST("/google", handler.GoogleLogin)
 		auth.POST("/dev-login", handler.DevLogin)
+		auth.POST("/refresh", handler.RefreshToken)
+		auth.POST("/logout", handler.Logout)
+		auth.POST("/revoke-all", authMiddleware, handler.RevokeAllTokens)
 
 		// Legacy/Compatible routes
 		auth.GET("/me", authMiddleware, handler.GetMe)
@@ -68,9 +72,9 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Con
 				return
 			}
 			bearerToken := tokenString[7:]
-			userID, err := ValidateJWT(bearerToken, cfg)
+			claims, err := idToken.ValidateToken(bearerToken, cfg.JWTSecret)
 			if err == nil {
-				user, err := repo.GetUserByID(c.Request.Context(), userID)
+				user, err := repo.GetUserByID(c.Request.Context(), claims.UserID)
 				if err == nil {
 					c.Set("user", user)
 				}
@@ -91,9 +95,9 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Con
 				return
 			}
 			bearerToken := tokenString[7:]
-			userID, err := ValidateJWT(bearerToken, cfg)
+			claims, err := idToken.ValidateToken(bearerToken, cfg.JWTSecret)
 			if err == nil {
-				user, err := repo.GetUserByID(c.Request.Context(), userID)
+				user, err := repo.GetUserByID(c.Request.Context(), claims.UserID)
 				if err == nil {
 					c.Set("user", user)
 				}

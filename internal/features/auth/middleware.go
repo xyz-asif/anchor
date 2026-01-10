@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/xyz-asif/gotodo/internal/config"
+	idToken "github.com/xyz-asif/gotodo/internal/pkg/jwt"
 	"github.com/xyz-asif/gotodo/internal/pkg/response"
 )
 
@@ -26,12 +27,13 @@ func NewAuthMiddleware(repo *Repository, cfg *config.Config) gin.HandlerFunc {
 		}
 
 		tokenString := parts[1]
-		userID, err := ValidateJWT(tokenString, cfg)
+		claims, err := idToken.ValidateToken(tokenString, cfg.JWTSecret)
 		if err != nil {
 			response.Unauthorized(c, "Invalid or expired token", "INVALID_TOKEN")
 			c.Abort()
 			return
 		}
+		userID := claims.UserID
 
 		user, err := repo.GetUserByID(c.Request.Context(), userID)
 		if err != nil {

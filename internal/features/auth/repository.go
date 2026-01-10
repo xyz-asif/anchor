@@ -15,7 +15,8 @@ import (
 
 // Repository handles database interactions for the auth feature
 type Repository struct {
-	collection *mongo.Collection
+	collection              *mongo.Collection
+	refreshTokensCollection *mongo.Collection
 }
 
 // NewRepository initializes the repository and creates necessary indexes
@@ -53,7 +54,26 @@ func NewRepository(db *mongo.Database) *Repository {
 		},
 	})
 
-	return &Repository{collection: collection}
+	refreshTokensCollection := db.Collection("refresh_tokens")
+	// Create indexes for refresh tokens
+	_, _ = refreshTokensCollection.Indexes().CreateMany(context.Background(), []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "tokenId", Value: 1}},
+			Options: options.Index().SetUnique(true),
+		},
+		{
+			Keys: bson.D{{Key: "userId", Value: 1}},
+		},
+		{
+			Keys:    bson.D{{Key: "expiresAt", Value: 1}},
+			Options: options.Index().SetExpireAfterSeconds(0), // TTL index
+		},
+	})
+
+	return &Repository{
+		collection:              collection,
+		refreshTokensCollection: refreshTokensCollection,
+	}
 }
 
 // CreateUser inserts a new user into the database
@@ -305,8 +325,44 @@ func (r *Repository) GetUserIDsByUsernames(ctx context.Context, usernames []stri
 	return result, nil
 }
 
+// SaveRefreshToken stores a new refresh token session
+func (r *Repository) SaveRefreshToken(ctx context.Context, session *RefreshTokenSession) error {
+	_, err := r.refreshTokensCollection.InsertOne(ctx, session)
+	return err
+}
+
+// GetRefreshToken retrieves a refresh token session by its TokenID (JTI)
+func (r *Repository) GetRefreshToken(ctx context.Context, tokenID string) (*RefreshTokenSession, error) {
+	var session RefreshTokenSession
+	err := r.refreshTokensCollection.FindOne(ctx, bson.M{"tokenId": tokenID}).Decode(&session)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &session, nil
+}
+
+// RevokeRefreshToken revokes a specific refresh token (marks as revoked or deletes)
+// We'll delete it since we have revocation logs if needed, or just standard logout behavior.
+// If we want to keep history, we'd mark revoked=true. But TTL will kill it anyway.
+// Let's delete it for "Logout".
+func (r *Repository) RevokeRefreshToken(ctx context.Context, tokenID string) error {
+	_, err := r.refreshTokensCollection.DeleteOne(ctx, bson.M{"tokenId": tokenID})
+	return err
+}
+
+// RevokeAllUserTokens revokes all refresh tokens for a user (Logout All Devices)
+func (r *Repository) RevokeAllUserTokens(ctx context.Context, userID primitive.ObjectID) error {
+	_, err := r.refreshTokensCollection.DeleteMany(ctx, bson.M{"userId": userID})
+	return err
+}
+
 // DeleteUser permanently removes a user from the database
 func (r *Repository) DeleteUser(ctx context.Context, userID primitive.ObjectID) error {
+	// Also delete all refresh tokens
+	_ = r.RevokeAllUserTokens(ctx, userID)
 	_, err := r.collection.DeleteOne(ctx, bson.M{"_id": userID})
 	return err
 }

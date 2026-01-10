@@ -15,6 +15,7 @@ type Config struct {
 	DBName                     string
 	JWTSecret                  string
 	JWTExpireHours             int
+	RefreshTokenExpireHours    int
 	FirebaseProjectID          string
 	FirebaseServiceAccountPath string
 	GoogleClientID             string
@@ -32,6 +33,7 @@ func Load() *Config {
 	}
 
 	jwtExpireHours, _ := strconv.Atoi(getEnv("JWT_EXPIRE_HOURS", "72"))
+	refreshTokenExpireHours, _ := strconv.Atoi(getEnv("REFRESH_TOKEN_EXPIRE_HOURS", "168")) // 7 days default
 
 	return &Config{
 		Port:                       getEnv("PORT", "8080"),
@@ -40,6 +42,7 @@ func Load() *Config {
 		DBName:                     getEnv("DB_NAME", "anchor_db"),
 		JWTSecret:                  getEnv("JWT_SECRET", "change-this-secret"),
 		JWTExpireHours:             jwtExpireHours,
+		RefreshTokenExpireHours:    refreshTokenExpireHours,
 		FirebaseProjectID:          getEnv("FIREBASE_PROJECT_ID", ""),
 		FirebaseServiceAccountPath: getEnv("FIREBASE_SERVICE_ACCOUNT_PATH", "./internal/config/serviceAccountKey.json"),
 		GoogleClientID:             getEnv("GOOGLE_CLIENT_ID", ""),

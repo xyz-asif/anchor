@@ -6,7 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/xyz-asif/gotodo/internal/config"
 	"github.com/xyz-asif/gotodo/internal/features/auth"
-
+	"github.com/xyz-asif/gotodo/internal/pkg/jwt"
 	"github.com/xyz-asif/gotodo/internal/pkg/response"
 )
 
@@ -28,12 +28,13 @@ func NewAuthMiddleware(repo *auth.Repository, cfg *config.Config) gin.HandlerFun
 		}
 
 		tokenString := parts[1]
-		userID, err := auth.ValidateJWT(tokenString, cfg)
+		claims, err := jwt.ValidateToken(tokenString, cfg.JWTSecret)
 		if err != nil {
 			response.Unauthorized(c, "Invalid or expired token", "INVALID_TOKEN")
 			c.Abort()
 			return
 		}
+		userID := claims.UserID
 
 		user, err := repo.GetUserByID(c.Request.Context(), userID)
 		if err != nil {
@@ -66,12 +67,13 @@ func OptionalAuthMiddleware(repo *auth.Repository, cfg *config.Config) gin.Handl
 		}
 
 		tokenString := parts[1]
-		userID, err := auth.ValidateJWT(tokenString, cfg)
+		claims, err := jwt.ValidateToken(tokenString, cfg.JWTSecret)
 		if err != nil {
 			// Invalid token - continue without auth (don't abort)
 			c.Next()
 			return
 		}
+		userID := claims.UserID
 
 		user, err := repo.GetUserByID(c.Request.Context(), userID)
 		if err != nil {

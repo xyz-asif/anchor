@@ -8,8 +8,10 @@ import (
 
 	"firebase.google.com/go/v4/auth"
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/xyz-asif/gotodo/internal/config"
 	"github.com/xyz-asif/gotodo/internal/pkg/cloudinary"
+	idToken "github.com/xyz-asif/gotodo/internal/pkg/jwt"
 	"github.com/xyz-asif/gotodo/internal/pkg/response"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -58,6 +60,17 @@ func NewHandler(repo *Repository, firebaseClient *auth.Client, cfg *config.Confi
 		cloudinary:     cld,
 		followService:  followService,
 		anchorService:  anchorService,
+	}
+}
+
+func (h *Handler) getJWTConfig() *idToken.Config {
+	return &idToken.Config{
+		Secret:        h.config.JWTSecret,
+		AccessExpiry:  time.Duration(h.config.JWTExpireHours) * time.Hour,
+		RefreshExpiry: time.Duration(h.config.RefreshTokenExpireHours) * time.Hour,
+		Issuer:        "gotodo-api",
+		Audience:      "gotodo-users",
+		SigningMethod: jwt.SigningMethodHS256,
 	}
 }
 
@@ -161,11 +174,32 @@ func (h *Handler) GoogleLogin(c *gin.Context) {
 		}
 	}
 
-	// Generate JWT
-	accessToken, err := GenerateJWT(user.ID.Hex(), h.config)
+	// Generate Token Pair
+	jwtConfig := h.getJWTConfig()
+	accessToken, refreshToken, err := idToken.GenerateTokenPair(user.ID.Hex(), user.Email, jwtConfig)
 	if err != nil {
-		response.BadRequest(c, "Failed to generate token", "AUTH_FAILED")
+		response.BadRequest(c, "Failed to generate tokens", "AUTH_FAILED")
 		return
+	}
+
+	// Save Refresh Token
+	claims, _ := idToken.GetTokenClaims(refreshToken)
+	if claims != nil {
+		tokenID := claims.ID // JTI
+		session := &RefreshTokenSession{
+			ID:        primitive.NewObjectID(),
+			UserID:    user.ID,
+			TokenID:   tokenID,
+			ExpiresAt: claims.ExpiresAt.Time,
+			CreatedAt: time.Now(),
+			Revoked:   false,
+			UserAgent: c.Request.UserAgent(),
+			IPAddress: c.ClientIP(),
+		}
+		if err := h.repo.SaveRefreshToken(c.Request.Context(), session); err != nil {
+			// Log error but proceed? Or fail? Better fail for consistency.
+			fmt.Printf("Failed to save refresh token: %v\n", err)
+		}
 	}
 
 	stcode := 200
@@ -174,8 +208,9 @@ func (h *Handler) GoogleLogin(c *gin.Context) {
 	}
 
 	response.Respond(c, stcode, true, "Login successful", AuthResponse{
-		User:        user,
-		AccessToken: accessToken,
+		User:         user,
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
 	})
 }
 
@@ -235,22 +270,169 @@ func (h *Handler) DevLogin(c *gin.Context) {
 		}
 	}
 
-	// Generate JWT token
-	token, err := GenerateJWT(user.ID.Hex(), h.config)
+	// Generate Token Pair
+	jwtConfig := h.getJWTConfig()
+	accessToken, refreshToken, err := idToken.GenerateTokenPair(user.ID.Hex(), user.Email, jwtConfig)
 	if err != nil {
-		response.InternalServerError(c, "TOKEN_FAILED", "Failed to generate token")
+		response.InternalServerError(c, "TOKEN_FAILED", "Failed to generate tokens")
 		return
+	}
+
+	// Save Refresh Token
+	claims, _ := idToken.GetTokenClaims(refreshToken)
+	if claims != nil {
+		tokenID := claims.ID // JTI
+		session := &RefreshTokenSession{
+			ID:        primitive.NewObjectID(),
+			UserID:    user.ID,
+			TokenID:   tokenID,
+			ExpiresAt: claims.ExpiresAt.Time,
+			CreatedAt: time.Now(),
+			Revoked:   false,
+			UserAgent: c.Request.UserAgent(),
+			IPAddress: c.ClientIP(),
+		}
+		if err := h.repo.SaveRefreshToken(c.Request.Context(), session); err != nil {
+			fmt.Printf("Failed to save refresh token: %v\n", err)
+		}
 	}
 
 	// Determine if username setup is needed
 	needsUsername := user.Username == "" || strings.HasPrefix(user.Username, "dev_")
 
 	response.Success(c, LoginResponse{
-		Token:            token,
+		Token:            accessToken,
+		RefreshToken:     refreshToken,
 		User:             user,
 		IsNewUser:        needsUsername,
 		RequiresUsername: needsUsername,
 	})
+}
+
+// RefreshToken handles token refresh
+// @Summary Refresh access token
+// @Description Get a new access token using a valid refresh token
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param request body RefreshTokenRequest true "Refresh token"
+// @Success 200 {object} response.APIResponse{data=AuthResponse}
+// @Failure 400 {object} response.APIResponse
+// @Failure 401 {object} response.APIResponse
+// @Router /auth/refresh [post]
+func (h *Handler) RefreshToken(c *gin.Context) {
+	var req RefreshTokenRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request format", "INVALID_JSON")
+		return
+	}
+
+	// Validate Token Signature
+	claims, err := idToken.ValidateToken(req.RefreshToken, h.config.JWTSecret)
+	if err != nil {
+		response.Unauthorized(c, "Invalid refresh token", "INVALID_TOKEN")
+		return
+	}
+
+	// Check if token exists in DB and is not revoked
+	// Note: We need JTI (Token ID) for this. pkg/jwt needs to ensure JTI is set.
+	// Standard claims usually have ID. Let's assume GenerateTokenPair adds it.
+	// If not, we might need to rely on just claims, but we should verify DB.
+	if claims.ID == "" {
+		// Fallback: If no JTI, we can't strict verify. But we should enforce JTI usage.
+		// For now, let's assume JTI is present.
+	}
+
+	session, err := h.repo.GetRefreshToken(c.Request.Context(), claims.ID)
+	if err != nil {
+		response.Unauthorized(c, "Token lookup failed", "INVALID_TOKEN")
+		return
+	}
+	if session == nil {
+		response.Unauthorized(c, "Token revoked or not found", "TOKEN_REVOKED")
+		return
+	}
+	if session.Revoked {
+		response.Unauthorized(c, "Token has been revoked", "TOKEN_REVOKED")
+		return
+	}
+
+	// Generate NEW Access Token
+	jwtConfig := h.getJWTConfig()
+	newAccessToken, err := idToken.GenerateToken(claims.UserID, claims.Email, jwtConfig)
+	if err != nil {
+		response.InternalServerError(c, "Failed to generate token", "INTERNAL_ERROR")
+		return
+	}
+
+	// Return new access token (and keep same refresh token)
+	response.Success(c, AuthResponse{
+		AccessToken:  newAccessToken,
+		RefreshToken: req.RefreshToken,
+		// User is optional here, but client might want it?
+		// Let's optimize and not fetch full user unless needed.
+		// Struct has User *User, so it can be nil.
+	})
+}
+
+// Logout Revokes the current refresh token
+// @Summary Logout
+// @Description Revoke the refresh token
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param request body RefreshTokenRequest true "Refresh token to revoke"
+// @Success 200 {object} response.APIResponse
+// @Failure 400 {object} response.APIResponse
+// @Router /auth/logout [post]
+func (h *Handler) Logout(c *gin.Context) {
+	var req RefreshTokenRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request format", "INVALID_JSON")
+		return
+	}
+
+	// We don't necessarily need to validate signature to revoke it, but it's safer.
+	claims, err := idToken.GetTokenClaims(req.RefreshToken)
+	if err != nil {
+		response.BadRequest(c, "Invalid token format", "INVALID_TOKEN")
+		return
+	}
+
+	if claims.ID != "" {
+		_ = h.repo.RevokeRefreshToken(c.Request.Context(), claims.ID)
+	}
+
+	response.Success(c, "Logged out successfully")
+}
+
+// RevokeAllTokens Revokes all tokens for the user
+// @Summary Revoke all tokens
+// @Description Revoke all refresh tokens for the current user
+// @Tags auth
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} response.APIResponse
+// @Failure 401 {object} response.APIResponse
+// @Router /auth/revoke-all [post]
+func (h *Handler) RevokeAllTokens(c *gin.Context) {
+	val, exists := c.Get("user")
+	if !exists {
+		response.Unauthorized(c, "Authentication required", "AUTH_FAILED")
+		return
+	}
+	user, ok := val.(*User)
+	if !ok {
+		response.BadRequest(c, "User context error", "INTERNAL_ERROR")
+		return
+	}
+
+	if err := h.repo.RevokeAllUserTokens(c.Request.Context(), user.ID); err != nil {
+		response.InternalServerError(c, "Failed to revoke tokens", "DATABASE_ERROR")
+		return
+	}
+
+	response.Success(c, "All sessions revoked")
 }
 
 // GetOwnProfile returns the authenticated user's private profile

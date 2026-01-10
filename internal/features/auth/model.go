@@ -42,15 +42,34 @@ type DevLoginRequest struct {
 	DisplayName string `json:"displayName"`
 }
 
+// RefreshTokenRequest represents the payload for refreshing access token
+type RefreshTokenRequest struct {
+	RefreshToken string `json:"refreshToken" binding:"required"`
+}
+
+// RefreshTokenSession represents a stored refresh token in the database
+type RefreshTokenSession struct {
+	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	UserID    primitive.ObjectID `bson:"userId" json:"userId"`
+	TokenID   string             `bson:"tokenId" json:"tokenId"` // JTI from the token
+	ExpiresAt time.Time          `bson:"expiresAt" json:"expiresAt"`
+	CreatedAt time.Time          `bson:"createdAt" json:"createdAt"`
+	Revoked   bool               `bson:"revoked" json:"revoked"`
+	UserAgent string             `bson:"userAgent" json:"userAgent"`
+	IPAddress string             `bson:"ipAddress" json:"ipAddress"`
+}
+
 // AuthResponse represents the response after successful authentication
 type AuthResponse struct {
-	User        *User  `json:"user"`
-	AccessToken string `json:"accessToken"`
+	User         *User  `json:"user"`
+	AccessToken  string `json:"accessToken"`
+	RefreshToken string `json:"refreshToken"`
 }
 
 // LoginResponse represents the response for DevLogin
 type LoginResponse struct {
-	Token            string      `json:"token"`
+	Token            string      `json:"token"` // Access Token
+	RefreshToken     string      `json:"refreshToken"`
 	User             interface{} `json:"user"`
 	IsNewUser        bool        `json:"isNewUser"`
 	RequiresUsername bool        `json:"requiresUsername"`

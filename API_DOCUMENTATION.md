@@ -361,7 +361,7 @@
   "coverMediaType": "icon|emoji|image (optional)",
   "coverMediaValue": "string (optional)",
   "visibility": "private|unlisted|public (optional, default: public)",
-  "tags": ["string"] // optional, max 5 tags, each 3-20 chars
+  "tags": ["string"] // optional, max 5 tags, each 3-20 chars. Normalized to lowercase.
 }
 ```
 
@@ -448,7 +448,7 @@
   "coverMediaType": "icon|emoji|image (optional)",
   "coverMediaValue": "string (optional)",
   "visibility": "private|unlisted|public (optional)",
-  "tags": ["string"] // optional, max 5 tags
+  "tags": ["string"] // optional, max 5 tags. Normalized to lowercase.
 }
 ```
 
