@@ -222,6 +222,8 @@ definitions:
     properties:
       accessToken:
         type: string
+      refreshToken:
+        type: string
       user:
         $ref: '#/definitions/auth.User'
     type: object
@@ -250,9 +252,12 @@ definitions:
     properties:
       isNewUser:
         type: boolean
+      refreshToken:
+        type: string
       requiresUsername:
         type: boolean
       token:
+        description: Access Token
         type: string
       user: {}
     type: object
@@ -347,6 +352,13 @@ definitions:
         type: string
       username:
         type: string
+    type: object
+  auth.RefreshTokenRequest:
+    properties:
+      refreshToken:
+        type: string
+    required:
+    - refreshToken
     type: object
   auth.UpdateProfileRequest:
     properties:
@@ -1754,6 +1766,32 @@ paths:
       summary: Login with Google
       tags:
       - auth
+  /auth/logout:
+    post:
+      consumes:
+      - application/json
+      description: Revoke the refresh token
+      parameters:
+      - description: Refresh token to revoke
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/auth.RefreshTokenRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      summary: Logout
+      tags:
+      - auth
   /auth/me:
     get:
       description: Get the authenticated user's profile
@@ -1776,6 +1814,60 @@ paths:
       security:
       - BearerAuth: []
       summary: Get current user
+      tags:
+      - auth
+  /auth/refresh:
+    post:
+      consumes:
+      - application/json
+      description: Get a new access token using a valid refresh token
+      parameters:
+      - description: Refresh token
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/auth.RefreshTokenRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/auth.AuthResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      summary: Refresh access token
+      tags:
+      - auth
+  /auth/revoke-all:
+    post:
+      description: Revoke all refresh tokens for the current user
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Revoke all tokens
       tags:
       - auth
   /auth/username:

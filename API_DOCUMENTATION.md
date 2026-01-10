@@ -62,7 +62,8 @@
       "createdAt": "ISO8601",
       "updatedAt": "ISO8601"
     },
-    "accessToken": "string (JWT)"
+    "accessToken": "string (JWT)",
+    "refreshToken": "string (JWT)"
   }
 }
 ```
@@ -88,7 +89,8 @@
 {
   "success": true,
   "data": {
-    "token": "string (JWT)",
+    "token": "string (JWT - Access Token)",
+    "refreshToken": "string (JWT)",
     "user": { /* User object */ },
     "isNewUser": true,
     "requiresUsername": true
@@ -98,7 +100,76 @@
 
 ---
 
-### 1.3 Update Username
+### 1.3 Refresh Token
+
+**Endpoint:** `POST /auth/refresh`
+**Authentication:** None (relies on refresh token in body)
+**Description:** Get a new access token using a valid refresh token.
+
+**Request Body:**
+```json
+{
+  "refreshToken": "string (required)"
+}
+```
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "data": {
+    "accessToken": "string (New Access Token)",
+    "refreshToken": "string (Existing or Rotated Refresh Token)",
+    "user": { /* User object (optional) */ }
+  }
+}
+```
+
+**Errors:**
+- `401` - Invalid or revoked refresh token
+
+---
+
+### 1.4 Logout
+
+**Endpoint:** `POST /auth/logout`
+**Authentication:** None (relies on refresh token in body)
+**Description:** Revoke a specific refresh token.
+
+**Request Body:**
+```json
+{
+  "refreshToken": "string (required)"
+}
+```
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "message": "Logged out successfully"
+}
+```
+
+---
+
+### 1.5 Revoke All Sessions
+
+**Endpoint:** `POST /auth/revoke-all`
+**Authentication:** Required (Access Token)
+**Description:** Revoke all refresh tokens for the current user (Logout from all devices).
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "message": "All sessions revoked"
+}
+```
+
+---
+
+### 1.6 Update Username
 
 **Endpoint:** `PATCH /auth/username`  
 **Authentication:** Required  
