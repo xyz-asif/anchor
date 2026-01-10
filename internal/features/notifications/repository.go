@@ -69,6 +69,27 @@ func (r *Repository) CreateMany(ctx context.Context, notifications []Notificatio
 	return err
 }
 
+// CreateNotifications creates multiple notifications at once
+func (r *Repository) CreateNotifications(ctx context.Context, notifications []Notification) error {
+	if len(notifications) == 0 {
+		return nil
+	}
+
+	docs := make([]interface{}, len(notifications))
+	for i, n := range notifications {
+		if n.ID.IsZero() {
+			notifications[i].ID = primitive.NewObjectID()
+		}
+		if n.CreatedAt.IsZero() {
+			notifications[i].CreatedAt = time.Now()
+		}
+		docs[i] = notifications[i]
+	}
+
+	_, err := r.collection.InsertMany(ctx, docs)
+	return err
+}
+
 // GetNotificationByID retrieves a notification by ID
 func (r *Repository) GetNotificationByID(ctx context.Context, notificationID primitive.ObjectID) (*Notification, error) {
 	var notification Notification

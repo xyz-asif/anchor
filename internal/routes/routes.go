@@ -10,6 +10,7 @@ import (
 	"github.com/xyz-asif/gotodo/internal/features/comments"
 	"github.com/xyz-asif/gotodo/internal/features/feed"
 	"github.com/xyz-asif/gotodo/internal/features/follows"
+	"github.com/xyz-asif/gotodo/internal/features/interests"
 	"github.com/xyz-asif/gotodo/internal/features/likes"
 	"github.com/xyz-asif/gotodo/internal/features/notifications"
 	"github.com/xyz-asif/gotodo/internal/features/search"
@@ -77,4 +78,5 @@ func SetupRoutes(router *gin.Engine, db *mongo.Database, cfg *config.Config) {
 	notifications.RegisterRoutes(api, db, cfg, anchorsRepo)
 	search.RegisterRoutes(api, db, cfg)
 	feed.RegisterRoutes(api, db, cfg)
+	interests.RegisterRoutes(api, db, cfg)
 }

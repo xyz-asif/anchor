@@ -41,11 +41,13 @@ type Anchor struct {
 	ViewCount          int                 `bson:"viewCount" json:"viewCount"`
 	ItemCount          int                 `bson:"itemCount" json:"itemCount"`
 	EngagementScore    int                 `bson:"engagementScore" json:"engagementScore"`
+	FollowerCount      int                 `bson:"followerCount" json:"followerCount"`
+	Version            int                 `bson:"version" json:"version"`                 // Increments on content updates
+	LastItemAddedAt    *time.Time          `bson:"lastItemAddedAt" json:"lastItemAddedAt"` // When last item was added
 
-	CreatedAt       time.Time  `bson:"createdAt" json:"createdAt"`
-	UpdatedAt       time.Time  `bson:"updatedAt" json:"updatedAt"`
-	LastItemAddedAt time.Time  `bson:"lastItemAddedAt" json:"lastItemAddedAt"`
-	DeletedAt       *time.Time `bson:"deletedAt,omitempty" json:"deletedAt,omitempty"`
+	CreatedAt time.Time  `bson:"createdAt" json:"createdAt"`
+	UpdatedAt time.Time  `bson:"updatedAt" json:"updatedAt"`
+	DeletedAt *time.Time `bson:"deletedAt,omitempty" json:"deletedAt,omitempty"`
 }
 
 // Item represents a single content item within an anchor

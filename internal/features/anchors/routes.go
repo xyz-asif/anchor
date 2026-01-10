@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/xyz-asif/gotodo/internal/config"
+	"github.com/xyz-asif/gotodo/internal/features/anchor_follows"
 	"github.com/xyz-asif/gotodo/internal/features/auth"
 	"github.com/xyz-asif/gotodo/internal/features/notifications"
 	"github.com/xyz-asif/gotodo/internal/middleware"
@@ -18,6 +19,7 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Con
 	repo := NewRepository(db)
 	authRepo := auth.NewRepository(db)
 	notificationService := notifications.GetService(db)
+	anchorFollowsRepo := anchor_follows.GetRepository(db)
 
 	// Initialize Cloudinary service
 	cloudinarySvc, err := cloudinary.NewService(cfg.CloudinaryCloudName, cfg.CloudinaryAPIKey, cfg.CloudinaryAPISecret, "anchors")
@@ -26,7 +28,7 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Con
 	}
 
 	// Initialize handler (repos passed as nil to avoid import cycles)
-	handler := NewHandler(repo, authRepo, notificationService, cfg, cloudinarySvc, nil, nil)
+	handler := NewHandler(repo, authRepo, notificationService, cfg, cloudinarySvc, nil, nil, anchorFollowsRepo)
 
 	// Initialize auth middleware
 	authMiddleware := middleware.NewAuthMiddleware(authRepo, cfg)

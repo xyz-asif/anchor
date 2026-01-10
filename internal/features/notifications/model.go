@@ -8,11 +8,12 @@ import (
 
 // Notification type constants
 const (
-	TypeMention = "mention"
-	TypeComment = "comment"
-	TypeLike    = "like"
-	TypeFollow  = "follow"
-	TypeClone   = "clone"
+	TypeMention      = "mention"
+	TypeComment      = "comment"
+	TypeLike         = "like"
+	TypeFollow       = "follow"
+	TypeClone        = "clone"
+	TypeAnchorUpdate = "anchor_update"
 )
 
 // Notification represents a user notification

@@ -35,5 +35,5 @@ func GetService(db *mongo.Database) *Service {
 	repo := NewRepository(db)
 	authRepo := auth.NewRepository(db)
 
-	return NewService(repo, authRepo)
+	return NewService(repo, authRepo, db)
 }

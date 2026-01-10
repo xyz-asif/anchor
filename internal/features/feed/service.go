@@ -181,7 +181,7 @@ func (s *Service) GetHomeFeed(
 			LikeCount:       anchor.LikeCount,
 			CloneCount:      anchor.CloneCount,
 			CommentCount:    anchor.CommentCount,
-			LastItemAddedAt: anchor.LastItemAddedAt,
+			LastItemAddedAt: *anchor.LastItemAddedAt,
 			CreatedAt:       anchor.CreatedAt,
 			Author:          *author,
 			Engagement:      *engagement,
@@ -193,7 +193,7 @@ func (s *Service) GetHomeFeed(
 	var nextCursor *string
 	if hasMore {
 		lastAnchor := anchorsList[len(anchorsList)-1]
-		c := EncodeCursor(lastAnchor.LastItemAddedAt, lastAnchor.ID)
+		c := EncodeCursor(*lastAnchor.LastItemAddedAt, lastAnchor.ID)
 		nextCursor = &c
 	}
 
@@ -557,7 +557,7 @@ func (s *Service) GetDiscoverFeed(
 			CloneCount:      anchor.CloneCount,
 			CommentCount:    anchor.CommentCount,
 			EngagementScore: anchor.EngagementScore,
-			LastItemAddedAt: anchor.LastItemAddedAt,
+			LastItemAddedAt: *anchor.LastItemAddedAt,
 			CreatedAt:       anchor.CreatedAt,
 			Author:          *author,
 			Engagement:      *engagement,

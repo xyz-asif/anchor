@@ -96,7 +96,8 @@ func NewRepository(db *mongo.Database) *Repository {
 func (r *Repository) CreateAnchor(ctx context.Context, anchor *Anchor) error {
 	anchor.CreatedAt = time.Now()
 	anchor.UpdatedAt = time.Now()
-	anchor.LastItemAddedAt = time.Now()
+	now := time.Now()
+	anchor.LastItemAddedAt = &now
 
 	result, err := r.anchorsCollection.InsertOne(ctx, anchor)
 	if err != nil {
@@ -540,4 +541,65 @@ func (r *Repository) GetAnchorTitles(ctx context.Context, anchorIDs []primitive.
 	}
 
 	return result, nil
+}
+
+// IncrementVersion increments the version of an anchor
+func (r *Repository) IncrementVersion(ctx context.Context, anchorID primitive.ObjectID) error {
+	filter := bson.M{"_id": anchorID}
+	update := bson.M{
+		"$inc": bson.M{"version": 1},
+	}
+	_, err := r.anchorsCollection.UpdateOne(ctx, filter, update)
+	return err
+}
+
+// TagCount represents a tag with its usage count
+type TagCount struct {
+	Name  string `bson:"name"`
+	Count int    `bson:"count"`
+}
+
+// GetPopularTags returns most used tags from public anchors
+func (r *Repository) GetPopularTags(ctx context.Context, limit int) ([]TagCount, error) {
+	pipeline := mongo.Pipeline{
+		// Match public, non-deleted anchors
+		{{Key: "$match", Value: bson.M{
+			"visibility": VisibilityPublic,
+			"deletedAt":  nil,
+		}}},
+		// Unwind tags array
+		{{Key: "$unwind", Value: "$tags"}},
+		// Group by tag and count
+		{{Key: "$group", Value: bson.M{
+			"_id":   bson.M{"$toLower": "$tags"},
+			"count": bson.M{"$sum": 1},
+		}}},
+		// Sort by count DESC
+		{{Key: "$sort", Value: bson.M{"count": -1}}},
+		// Limit results
+		{{Key: "$limit", Value: limit}},
+		// Project final shape
+		{{Key: "$project", Value: bson.M{
+			"_id":   0,
+			"name":  "$_id",
+			"count": 1,
+		}}},
+	}
+
+	cursor, err := r.anchorsCollection.Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var results []TagCount
+	if err = cursor.All(ctx, &results); err != nil {
+		return nil, err
+	}
+
+	if results == nil {
+		results = []TagCount{}
+	}
+
+	return results, nil
 }

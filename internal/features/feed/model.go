@@ -175,3 +175,41 @@ type DiscoverResponse struct {
 	Pagination FeedPagination `json:"pagination"`
 	Meta       DiscoverMeta   `json:"meta"`
 }
+
+// FollowingAnchorFeedItem represents an anchor in the following feed
+type FollowingAnchorFeedItem struct {
+	ID               primitive.ObjectID `json:"id"`
+	Title            string             `json:"title"`
+	Description      string             `json:"description"`
+	CoverMediaType   string             `json:"coverMediaType"`
+	CoverMediaValue  string             `json:"coverMediaValue"`
+	Author           FeedItemAuthor     `json:"author"`
+	ItemCount        int                `json:"itemCount"`
+	LikeCount        int                `json:"likeCount"`
+	HasUnseenUpdates bool               `json:"hasUnseenUpdates"`
+	LastSeenVersion  int                `json:"lastSeenVersion"`
+	CurrentVersion   int                `json:"currentVersion"`
+	LastUpdatedAt    *time.Time         `json:"lastUpdatedAt"`
+}
+
+// FollowingAnchorsSection represents the horizontal scroll section
+type FollowingAnchorsSection struct {
+	Title string                    `json:"title"`
+	Items []FollowingAnchorFeedItem `json:"items"`
+}
+
+// SuggestedCategory represents a category in the discovery section
+type SuggestedCategory struct {
+	ID          string   `json:"id"`
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	Icon        string   `json:"icon"`
+	Tags        []string `json:"tags"` // For query construction
+}
+
+// HomeFeedResponse is the new main response for the home tab
+type HomeFeedResponse struct {
+	FollowingAnchors    *FollowingAnchorsSection `json:"followingAnchors,omitempty"`
+	SuggestedCategories []SuggestedCategory      `json:"suggestedCategories"`
+	DiscoverFeed        *DiscoverResponse        `json:"discoverFeed"` // Reuses existing discover feed structure
+}

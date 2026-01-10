@@ -1413,7 +1413,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/feed.FeedResponse"
+                                            "$ref": "#/definitions/feed.HomeFeedResponse"
                                         }
                                     }
                                 }
@@ -1430,6 +1430,46 @@ const docTemplate = `{
                         "description": "Unauthorized",
                         "schema": {
                             "$ref": "#/definitions/response.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/interests/suggested": {
+            "get": {
+                "description": "Get personalized category suggestions based on user activity",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "interests"
+                ],
+                "summary": "Get suggested interest categories",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Max categories (default 10, max 20)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/interests.SuggestedInterestsResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     }
                 }
@@ -2537,6 +2577,9 @@ const docTemplate = `{
                 "engagementScore": {
                     "type": "integer"
                 },
+                "followerCount": {
+                    "type": "integer"
+                },
                 "id": {
                     "type": "string"
                 },
@@ -2547,6 +2590,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "lastItemAddedAt": {
+                    "description": "When last item was added",
                     "type": "string"
                 },
                 "likeCount": {
@@ -2566,6 +2610,10 @@ const docTemplate = `{
                 },
                 "userId": {
                     "type": "string"
+                },
+                "version": {
+                    "description": "Increments on content updates",
+                    "type": "integer"
                 },
                 "viewCount": {
                     "type": "integer"
@@ -3406,65 +3454,6 @@ const docTemplate = `{
                 }
             }
         },
-        "feed.FeedItem": {
-            "type": "object",
-            "properties": {
-                "author": {
-                    "$ref": "#/definitions/feed.FeedItemAuthor"
-                },
-                "cloneCount": {
-                    "type": "integer"
-                },
-                "commentCount": {
-                    "type": "integer"
-                },
-                "coverMediaType": {
-                    "type": "string"
-                },
-                "coverMediaValue": {
-                    "type": "string"
-                },
-                "createdAt": {
-                    "type": "string"
-                },
-                "description": {
-                    "type": "string"
-                },
-                "engagement": {
-                    "$ref": "#/definitions/feed.FeedEngagement"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "isPinned": {
-                    "type": "boolean"
-                },
-                "itemCount": {
-                    "type": "integer"
-                },
-                "lastItemAddedAt": {
-                    "type": "string"
-                },
-                "likeCount": {
-                    "type": "integer"
-                },
-                "preview": {
-                    "$ref": "#/definitions/feed.FeedPreview"
-                },
-                "tags": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "title": {
-                    "type": "string"
-                },
-                "visibility": {
-                    "type": "string"
-                }
-            }
-        },
         "feed.FeedItemAuthor": {
             "type": "object",
             "properties": {
@@ -3519,23 +3508,6 @@ const docTemplate = `{
                 }
             }
         },
-        "feed.FeedMeta": {
-            "type": "object",
-            "properties": {
-                "emptyReason": {
-                    "type": "string"
-                },
-                "feedType": {
-                    "type": "string"
-                },
-                "includesOwnAnchors": {
-                    "type": "boolean"
-                },
-                "totalFollowing": {
-                    "type": "integer"
-                }
-            }
-        },
         "feed.FeedPagination": {
             "type": "object",
             "properties": {
@@ -3581,20 +3553,104 @@ const docTemplate = `{
                 }
             }
         },
-        "feed.FeedResponse": {
+        "feed.FollowingAnchorFeedItem": {
+            "type": "object",
+            "properties": {
+                "author": {
+                    "$ref": "#/definitions/feed.FeedItemAuthor"
+                },
+                "coverMediaType": {
+                    "type": "string"
+                },
+                "coverMediaValue": {
+                    "type": "string"
+                },
+                "currentVersion": {
+                    "type": "integer"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "hasUnseenUpdates": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "itemCount": {
+                    "type": "integer"
+                },
+                "lastSeenVersion": {
+                    "type": "integer"
+                },
+                "lastUpdatedAt": {
+                    "type": "string"
+                },
+                "likeCount": {
+                    "type": "integer"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "feed.FollowingAnchorsSection": {
             "type": "object",
             "properties": {
                 "items": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/feed.FeedItem"
+                        "$ref": "#/definitions/feed.FollowingAnchorFeedItem"
                     }
                 },
-                "meta": {
-                    "$ref": "#/definitions/feed.FeedMeta"
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "feed.HomeFeedResponse": {
+            "type": "object",
+            "properties": {
+                "discoverFeed": {
+                    "description": "Reuses existing discover feed structure",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/feed.DiscoverResponse"
+                        }
+                    ]
                 },
-                "pagination": {
-                    "$ref": "#/definitions/feed.FeedPagination"
+                "followingAnchors": {
+                    "$ref": "#/definitions/feed.FollowingAnchorsSection"
+                },
+                "suggestedCategories": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/feed.SuggestedCategory"
+                    }
+                }
+            }
+        },
+        "feed.SuggestedCategory": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "icon": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "tags": {
+                    "description": "For query construction",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "title": {
+                    "type": "string"
                 }
             }
         },
@@ -3720,6 +3776,63 @@ const docTemplate = `{
                             "type": "integer"
                         }
                     }
+                }
+            }
+        },
+        "interests.BasedOn": {
+            "type": "object",
+            "properties": {
+                "followedAnchorTags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "likedAnchorTags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "ownAnchorTags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "interests.Category": {
+            "type": "object",
+            "properties": {
+                "anchorCount": {
+                    "type": "integer"
+                },
+                "displayName": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "relevanceScore": {
+                    "type": "number"
+                }
+            }
+        },
+        "interests.SuggestedInterestsResponse": {
+            "type": "object",
+            "properties": {
+                "basedOn": {
+                    "$ref": "#/definitions/interests.BasedOn"
+                },
+                "categories": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/interests.Category"
+                    }
+                },
+                "personalized": {
+                    "type": "boolean"
                 }
             }
         },

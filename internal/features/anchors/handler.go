@@ -1,12 +1,14 @@
 package anchors
 
 import (
+	"context"
 	"log"
 	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xyz-asif/gotodo/internal/config"
+	"github.com/xyz-asif/gotodo/internal/features/anchor_follows"
 	"github.com/xyz-asif/gotodo/internal/features/auth"
 	"github.com/xyz-asif/gotodo/internal/features/notifications"
 	"github.com/xyz-asif/gotodo/internal/pkg/cloudinary"
@@ -23,10 +25,11 @@ type Handler struct {
 	cloudinary          *cloudinary.Service
 	likesRepo           interface{} // Using interface to avoid cycle
 	followsRepo         interface{} // Using interface to avoid cycle
+	anchorFollowsRepo   *anchor_follows.Repository
 }
 
 // NewHandler creates a new anchor handler
-func NewHandler(repo *Repository, authRepo *auth.Repository, notificationService *notifications.Service, cfg *config.Config, cld *cloudinary.Service, likesRepo interface{}, followsRepo interface{}) *Handler {
+func NewHandler(repo *Repository, authRepo *auth.Repository, notificationService *notifications.Service, cfg *config.Config, cld *cloudinary.Service, likesRepo interface{}, followsRepo interface{}, anchorFollowsRepo *anchor_follows.Repository) *Handler {
 	return &Handler{
 		repo:                repo,
 		authRepo:            authRepo,
@@ -35,6 +38,7 @@ func NewHandler(repo *Repository, authRepo *auth.Repository, notificationService
 		cloudinary:          cld,
 		likesRepo:           likesRepo,
 		followsRepo:         followsRepo,
+		anchorFollowsRepo:   anchorFollowsRepo,
 	}
 }
 
@@ -311,6 +315,20 @@ func (h *Handler) GetAnchor(c *gin.Context) {
 		}
 	}
 
+	// Update lastSeenVersion for followers (async)
+	if val, exists := c.Get("user"); exists {
+		if user, ok := val.(*auth.User); ok {
+			go func() {
+				_ = h.anchorFollowsRepo.UpdateLastSeenVersion(
+					context.Background(),
+					user.ID,
+					anchorID,
+					anchor.Version,
+				)
+			}()
+		}
+	}
+
 	// Get items
 	items, err := h.repo.GetAnchorItems(c.Request.Context(), anchorID)
 	if err != nil {
@@ -514,11 +532,26 @@ func (h *Handler) AddItem(c *gin.Context) {
 		return
 	}
 
-	// Update anchor lastItemAddedAt and increment itemCount
+	// Update anchor lastItemAddedAt, increment itemCount and version
 	h.repo.UpdateAnchor(c.Request.Context(), anchorID, map[string]interface{}{
-		"$set": map[string]interface{}{"lastItemAddedAt": item.CreatedAt},
-		"$inc": map[string]interface{}{"itemCount": 1},
+		"$set": map[string]interface{}{
+			"lastItemAddedAt": item.CreatedAt,
+		},
+		"$inc": map[string]interface{}{
+			"itemCount": 1,
+			"version":   1,
+		},
 	})
+
+	// Notify followers (async)
+	go func() {
+		_ = h.notificationService.CreateAnchorUpdateNotifications(
+			context.Background(),
+			anchorID,
+			anchor.Title,
+			user.ID,
+		)
+	}()
 
 	response.Created(c, item)
 }
@@ -622,9 +655,24 @@ func (h *Handler) UploadItem(c *gin.Context) {
 	}
 
 	h.repo.UpdateAnchor(c.Request.Context(), anchorID, map[string]interface{}{
-		"$set": map[string]interface{}{"lastItemAddedAt": item.CreatedAt},
-		"$inc": map[string]interface{}{"itemCount": 1},
+		"$set": map[string]interface{}{
+			"lastItemAddedAt": item.CreatedAt,
+		},
+		"$inc": map[string]interface{}{
+			"itemCount": 1,
+			"version":   1,
+		},
 	})
+
+	// Notify followers (async)
+	go func() {
+		_ = h.notificationService.CreateAnchorUpdateNotifications(
+			context.Background(),
+			anchorID,
+			anchor.Title,
+			user.ID,
+		)
+	}()
 
 	response.Success(c, item)
 }

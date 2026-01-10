@@ -23,6 +23,8 @@ definitions:
         type: string
       engagementScore:
         type: integer
+      followerCount:
+        type: integer
       id:
         type: string
       isPinned:
@@ -30,6 +32,7 @@ definitions:
       itemCount:
         type: integer
       lastItemAddedAt:
+        description: When last item was added
         type: string
       likeCount:
         type: integer
@@ -43,6 +46,9 @@ definitions:
         type: string
       userId:
         type: string
+      version:
+        description: Increments on content updates
+        type: integer
       viewCount:
         type: integer
       visibility:
@@ -600,45 +606,6 @@ definitions:
       likeSummary:
         $ref: '#/definitions/feed.FeedLikeSummary'
     type: object
-  feed.FeedItem:
-    properties:
-      author:
-        $ref: '#/definitions/feed.FeedItemAuthor'
-      cloneCount:
-        type: integer
-      commentCount:
-        type: integer
-      coverMediaType:
-        type: string
-      coverMediaValue:
-        type: string
-      createdAt:
-        type: string
-      description:
-        type: string
-      engagement:
-        $ref: '#/definitions/feed.FeedEngagement'
-      id:
-        type: string
-      isPinned:
-        type: boolean
-      itemCount:
-        type: integer
-      lastItemAddedAt:
-        type: string
-      likeCount:
-        type: integer
-      preview:
-        $ref: '#/definitions/feed.FeedPreview'
-      tags:
-        items:
-          type: string
-        type: array
-      title:
-        type: string
-      visibility:
-        type: string
-    type: object
   feed.FeedItemAuthor:
     properties:
       displayName:
@@ -674,17 +641,6 @@ definitions:
       username:
         type: string
     type: object
-  feed.FeedMeta:
-    properties:
-      emptyReason:
-        type: string
-      feedType:
-        type: string
-      includesOwnAnchors:
-        type: boolean
-      totalFollowing:
-        type: integer
-    type: object
   feed.FeedPagination:
     properties:
       hasMore:
@@ -714,16 +670,70 @@ definitions:
       type:
         type: string
     type: object
-  feed.FeedResponse:
+  feed.FollowingAnchorFeedItem:
+    properties:
+      author:
+        $ref: '#/definitions/feed.FeedItemAuthor'
+      coverMediaType:
+        type: string
+      coverMediaValue:
+        type: string
+      currentVersion:
+        type: integer
+      description:
+        type: string
+      hasUnseenUpdates:
+        type: boolean
+      id:
+        type: string
+      itemCount:
+        type: integer
+      lastSeenVersion:
+        type: integer
+      lastUpdatedAt:
+        type: string
+      likeCount:
+        type: integer
+      title:
+        type: string
+    type: object
+  feed.FollowingAnchorsSection:
     properties:
       items:
         items:
-          $ref: '#/definitions/feed.FeedItem'
+          $ref: '#/definitions/feed.FollowingAnchorFeedItem'
         type: array
-      meta:
-        $ref: '#/definitions/feed.FeedMeta'
-      pagination:
-        $ref: '#/definitions/feed.FeedPagination'
+      title:
+        type: string
+    type: object
+  feed.HomeFeedResponse:
+    properties:
+      discoverFeed:
+        allOf:
+        - $ref: '#/definitions/feed.DiscoverResponse'
+        description: Reuses existing discover feed structure
+      followingAnchors:
+        $ref: '#/definitions/feed.FollowingAnchorsSection'
+      suggestedCategories:
+        items:
+          $ref: '#/definitions/feed.SuggestedCategory'
+        type: array
+    type: object
+  feed.SuggestedCategory:
+    properties:
+      description:
+        type: string
+      icon:
+        type: string
+      id:
+        type: string
+      tags:
+        description: For query construction
+        items:
+          type: string
+        type: array
+      title:
+        type: string
     type: object
   follows.FollowActionRequest:
     properties:
@@ -805,6 +815,43 @@ definitions:
           totalPages:
             type: integer
         type: object
+    type: object
+  interests.BasedOn:
+    properties:
+      followedAnchorTags:
+        items:
+          type: string
+        type: array
+      likedAnchorTags:
+        items:
+          type: string
+        type: array
+      ownAnchorTags:
+        items:
+          type: string
+        type: array
+    type: object
+  interests.Category:
+    properties:
+      anchorCount:
+        type: integer
+      displayName:
+        type: string
+      name:
+        type: string
+      relevanceScore:
+        type: number
+    type: object
+  interests.SuggestedInterestsResponse:
+    properties:
+      basedOn:
+        $ref: '#/definitions/interests.BasedOn'
+      categories:
+        items:
+          $ref: '#/definitions/interests.Category'
+        type: array
+      personalized:
+        type: boolean
     type: object
   likes.LikeActionRequest:
     properties:
@@ -2006,7 +2053,7 @@ paths:
             - $ref: '#/definitions/response.APIResponse'
             - properties:
                 data:
-                  $ref: '#/definitions/feed.FeedResponse'
+                  $ref: '#/definitions/feed.HomeFeedResponse'
               type: object
         "400":
           description: Bad Request
@@ -2021,6 +2068,29 @@ paths:
       summary: Get home feed
       tags:
       - feed
+  /interests/suggested:
+    get:
+      description: Get personalized category suggestions based on user activity
+      parameters:
+      - description: Max categories (default 10, max 20)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/interests.SuggestedInterestsResponse'
+              type: object
+      summary: Get suggested interest categories
+      tags:
+      - interests
   /notifications:
     get:
       description: Get paginated list of user's notifications

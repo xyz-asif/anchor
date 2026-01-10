@@ -2,20 +2,25 @@ package notifications
 
 import (
 	"context"
+	"time"
 
+	"github.com/xyz-asif/gotodo/internal/features/anchor_follows"
 	"github.com/xyz-asif/gotodo/internal/features/auth"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 type Service struct {
 	repo     *Repository
 	authRepo *auth.Repository
+	db       *mongo.Database
 }
 
-func NewService(repo *Repository, authRepo *auth.Repository) *Service {
+func NewService(repo *Repository, authRepo *auth.Repository, db *mongo.Database) *Service {
 	return &Service{
 		repo:     repo,
 		authRepo: authRepo,
+		db:       db,
 	}
 }
 
@@ -193,4 +198,47 @@ func (s *Service) CreateCloneNotification(ctx context.Context, clonedAnchorID, o
 	}
 
 	return s.repo.CreateNotification(ctx, &notification)
+}
+
+// CreateAnchorUpdateNotifications notifies followers about anchor updates
+func (s *Service) CreateAnchorUpdateNotifications(ctx context.Context, anchorID primitive.ObjectID, anchorTitle string, authorID primitive.ObjectID) error {
+	// Get anchor_follows repository
+	anchorFollowsRepo := anchor_follows.GetRepository(s.db)
+
+	// Get all followers with notifyOnUpdate=true
+	followers, err := anchorFollowsRepo.GetFollowersWithNotifications(ctx, anchorID)
+	if err != nil {
+		return err
+	}
+
+	if len(followers) == 0 {
+		return nil
+	}
+
+	var notifications []Notification
+	for _, follower := range followers {
+		// Skip anchor author (shouldn't happen but safety check)
+		if follower.UserID == authorID {
+			continue
+		}
+
+		notifications = append(notifications, Notification{
+			ID:           primitive.NewObjectID(),
+			RecipientID:  follower.UserID,
+			ActorID:      authorID,
+			Type:         TypeAnchorUpdate,
+			ResourceType: "anchor",
+			ResourceID:   anchorID,
+			AnchorID:     &anchorID,
+			Preview:      truncate(anchorTitle, 100),
+			IsRead:       false,
+			CreatedAt:    time.Now(),
+		})
+	}
+
+	if len(notifications) > 0 {
+		return s.repo.CreateNotifications(ctx, notifications)
+	}
+
+	return nil
 }
