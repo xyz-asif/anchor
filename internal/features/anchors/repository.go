@@ -541,3 +541,34 @@ func (r *Repository) GetAnchorTitles(ctx context.Context, anchorIDs []primitive.
 
 	return result, nil
 }
+
+// GetAllUserAnchors retrieves ALL anchors for a specific user (for deletion)
+func (r *Repository) GetAllUserAnchors(ctx context.Context, userID primitive.ObjectID) ([]Anchor, error) {
+	filter := bson.M{"userId": userID} // Include deleted ones too to clean up? Yes.
+
+	cursor, err := r.anchorsCollection.Find(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var anchors []Anchor
+	if err = cursor.All(ctx, &anchors); err != nil {
+		return nil, err
+	}
+
+	return anchors, nil
+}
+
+// DeleteAnchor permanently deletes an anchor and its items
+func (r *Repository) DeleteAnchor(ctx context.Context, anchorID primitive.ObjectID) error {
+	// Delete items first
+	_, err := r.itemsCollection.DeleteMany(ctx, bson.M{"anchorId": anchorID})
+	if err != nil {
+		return err
+	}
+
+	// Delete anchor
+	_, err = r.anchorsCollection.DeleteOne(ctx, bson.M{"_id": anchorID})
+	return err
+}

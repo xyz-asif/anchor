@@ -373,6 +373,10 @@ definitions:
         type: integer
       bio:
         type: string
+      blockedUsers:
+        items:
+          type: string
+        type: array
       coverImageUrl:
         type: string
       createdAt:
@@ -389,6 +393,10 @@ definitions:
         type: string
       id:
         type: string
+      interests:
+        items:
+          type: string
+        type: array
       isVerified:
         type: boolean
       joinedAt:
@@ -403,6 +411,26 @@ definitions:
         type: boolean
       usernameChangedAt:
         type: string
+    type: object
+  cloudinary.UploadResult:
+    properties:
+      duration:
+        description: for audio/video, in seconds
+        format: float64
+        type: number
+      fileSize:
+        format: int64
+        type: integer
+      format:
+        type: string
+      height:
+        type: integer
+      publicID:
+        type: string
+      url:
+        type: string
+      width:
+        type: integer
     type: object
   comments.CommentAuthor:
     properties:
@@ -806,6 +834,43 @@ definitions:
             type: integer
         type: object
     type: object
+  interests.Category:
+    properties:
+      count:
+        type: integer
+      icon:
+        description: Emoji icon
+        type: string
+      name:
+        type: string
+      score:
+        description: Weighted score based on source
+        type: integer
+      slug:
+        description: URL-friendly version
+        type: string
+    type: object
+  interests.SaveInterestsRequest:
+    properties:
+      tags:
+        items:
+          type: string
+        maxItems: 10
+        minItems: 1
+        type: array
+    required:
+    - tags
+    type: object
+  interests.SuggestedInterestsResponse:
+    properties:
+      basedOn:
+        description: '"personalized" or "popular"'
+        type: string
+      categories:
+        items:
+          $ref: '#/definitions/interests.Category'
+        type: array
+    type: object
   likes.LikeActionRequest:
     properties:
       action:
@@ -983,6 +1048,25 @@ definitions:
         example: true
         type: boolean
     type: object
+  safety.CreateReportRequest:
+    properties:
+      reason:
+        maxLength: 500
+        minLength: 5
+        type: string
+      targetId:
+        type: string
+      targetType:
+        enum:
+        - anchor
+        - item
+        - user
+        type: string
+    required:
+    - reason
+    - targetId
+    - targetType
+    type: object
   search.AnchorSearchMeta:
     properties:
       query:
@@ -1132,6 +1216,10 @@ definitions:
         $ref: '#/definitions/search.UnifiedSearchAnchorsResult'
       query:
         type: string
+      tags:
+        items:
+          $ref: '#/definitions/search.TagResult'
+        type: array
       users:
         $ref: '#/definitions/search.UnifiedSearchUsersResult'
     type: object
@@ -2021,6 +2109,116 @@ paths:
       summary: Get home feed
       tags:
       - feed
+  /feed/tags/{tagName}:
+    get:
+      description: Get public anchors for a specific tag
+      parameters:
+      - description: Tag name
+        in: path
+        name: tagName
+        required: true
+        type: string
+      - description: Items per page (default 20, max 50)
+        in: query
+        name: limit
+        type: integer
+      - description: Pagination cursor
+        in: query
+        name: cursor
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/feed.DiscoverResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      summary: Get tag feed
+      tags:
+      - feed
+  /interests/suggested:
+    get:
+      description: Get personalized interest suggestions based on user activity or
+        popular tags
+      parameters:
+      - description: Max suggestions (default 10, max 20)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/interests.SuggestedInterestsResponse'
+              type: object
+      summary: Get suggested interests
+      tags:
+      - interests
+  /media/preview:
+    get:
+      description: Get metadata for a URL
+      parameters:
+      - description: URL to preview
+        in: query
+        name: url
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/anchors.URLData'
+              type: object
+      summary: Preview link
+      tags:
+      - media
+  /media/upload:
+    post:
+      consumes:
+      - multipart/form-data
+      description: Upload a file to Cloudinary (image, audio, or raw)
+      parameters:
+      - description: File to upload
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/cloudinary.UploadResult'
+              type: object
+      summary: Upload media
+      tags:
+      - media
   /notifications:
     get:
       description: Get paginated list of user's notifications
@@ -2148,6 +2346,29 @@ paths:
       summary: Get unread notification count
       tags:
       - notifications
+  /reports:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Report details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/safety.CreateReportRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Report content or user
+      tags:
+      - safety
   /search:
     get:
       description: Search across anchors and users
@@ -2226,6 +2447,38 @@ paths:
           schema:
             $ref: '#/definitions/response.APIResponse'
       summary: Search anchors
+      tags:
+      - search
+  /search/combined:
+    get:
+      description: Aggregate top results for anchors, users, and tags
+      parameters:
+      - description: Search query (min 2 chars)
+        in: query
+        name: q
+        required: true
+        type: string
+      - description: Results per type (default 3, max 10)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/search.UnifiedSearchResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      summary: Combined search for type-ahead
       tags:
       - search
   /search/tags:
@@ -2328,6 +2581,26 @@ paths:
       summary: Get public profile
       tags:
       - users
+  /users/{id}/block:
+    post:
+      parameters:
+      - description: User ID to block
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Block a user
+      tags:
+      - safety
   /users/{id}/follow:
     post:
       consumes:
@@ -2493,6 +2766,28 @@ paths:
       tags:
       - users
   /users/me:
+    delete:
+      description: Permanently delete the authenticated user's account and all content
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Delete account
+      tags:
+      - users
     get:
       description: Get the authenticated user's complete profile
       produces:
@@ -2552,6 +2847,32 @@ paths:
       summary: Update user profile
       tags:
       - users
+  /users/me/blocks:
+    get:
+      description: Get list of blocked users
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/auth.User'
+                  type: array
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Get blocked users
+      tags:
+      - safety
   /users/me/cover-image:
     delete:
       description: Remove the current user's cover image
@@ -2606,6 +2927,30 @@ paths:
       summary: Upload cover image
       tags:
       - users
+  /users/me/interests:
+    post:
+      consumes:
+      - application/json
+      description: Save interest tags for the authenticated user
+      parameters:
+      - description: Interest tags
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/interests.SaveInterestsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Save user interests
+      tags:
+      - interests
   /users/me/profile-picture:
     delete:
       description: Remove the current user's profile picture

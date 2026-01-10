@@ -116,6 +116,7 @@ type UnifiedSearchResponse struct {
 	Query   string                      `json:"query"`
 	Anchors *UnifiedSearchAnchorsResult `json:"anchors,omitempty"`
 	Users   *UnifiedSearchUsersResult   `json:"users,omitempty"`
+	Tags    []TagResult                 `json:"tags,omitempty"`
 }
 
 // AnchorSearchMeta for anchor search metadata

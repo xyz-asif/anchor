@@ -22,6 +22,7 @@ type FollowService interface {
 // AnchorService defines the interface for anchor operations to avoid import cycle
 type AnchorService interface {
 	GetPinnedAnchors(ctx context.Context, userID primitive.ObjectID, includePrivate bool) ([]PinnedAnchorData, error)
+	DeleteAllByUser(ctx context.Context, userID primitive.ObjectID) error
 }
 
 // PinnedAnchorData represents anchor data returned from anchor service
@@ -823,4 +824,52 @@ func (h *Handler) GetPinnedAnchors(c *gin.Context) {
 	}
 
 	response.Success(c, pinnedAnchors)
+}
+
+// DeleteAccount deletes the user's account and all associated data
+// @Summary Delete account
+// @Description Permanently delete the authenticated user's account and all content
+// @Tags users
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} response.APIResponse
+// @Failure 401 {object} response.APIResponse
+// @Failure 500 {object} response.APIResponse
+// @Router /users/me [delete]
+func (h *Handler) DeleteAccount(c *gin.Context) {
+	val, exists := c.Get("user")
+	if !exists {
+		response.Unauthorized(c, "Authentication required", "AUTH_FAILED")
+		return
+	}
+	user, ok := val.(*User)
+	if !ok {
+		response.BadRequest(c, "User context error", "INTERNAL_ERROR")
+		return
+	}
+
+	// 1. Delete all user content (Anchors, Items, Assets) via AnchorService
+	if h.anchorService != nil {
+		if err := h.anchorService.DeleteAllByUser(c.Request.Context(), user.ID); err != nil {
+			fmt.Printf("Failed to delete user content: %v\n", err)
+			response.InternalServerError(c, "Failed to delete user content", "DELETE_FAILED")
+			return
+		}
+	}
+
+	// 2. Delete Profile Picture and Cover Image from Cloudinary
+	if user.ProfilePicturePublicID != "" {
+		_ = h.cloudinary.Delete(c.Request.Context(), user.ProfilePicturePublicID, "image")
+	}
+	if user.CoverImagePublicID != "" {
+		_ = h.cloudinary.Delete(c.Request.Context(), user.CoverImagePublicID, "image")
+	}
+
+	// 3. Delete User from DB
+	if err := h.repo.DeleteUser(c.Request.Context(), user.ID); err != nil {
+		response.InternalServerError(c, "Failed to delete user", "DATABASE_ERROR")
+		return
+	}
+
+	response.Success(c, "Account deleted successfully")
 }

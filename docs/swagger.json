@@ -1432,6 +1432,190 @@
                 }
             }
         },
+        "/feed/tags/{tagName}": {
+            "get": {
+                "description": "Get public anchors for a specific tag",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "feed"
+                ],
+                "summary": "Get tag feed",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Tag name",
+                        "name": "tagName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Items per page (default 20, max 50)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Pagination cursor",
+                        "name": "cursor",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/feed.DiscoverResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/interests/suggested": {
+            "get": {
+                "description": "Get personalized interest suggestions based on user activity or popular tags",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "interests"
+                ],
+                "summary": "Get suggested interests",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Max suggestions (default 10, max 20)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/interests.SuggestedInterestsResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/media/preview": {
+            "get": {
+                "description": "Get metadata for a URL",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "media"
+                ],
+                "summary": "Preview link",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "URL to preview",
+                        "name": "url",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/anchors.URLData"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/media/upload": {
+            "post": {
+                "description": "Upload a file to Cloudinary (image, audio, or raw)",
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "media"
+                ],
+                "summary": "Upload media",
+                "parameters": [
+                    {
+                        "type": "file",
+                        "description": "File to upload",
+                        "name": "file",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/cloudinary.UploadResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
         "/notifications": {
             "get": {
                 "security": [
@@ -1651,6 +1835,44 @@
                 }
             }
         },
+        "/reports": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "safety"
+                ],
+                "summary": "Report content or user",
+                "parameters": [
+                    {
+                        "description": "Report details",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/safety.CreateReportRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/search": {
             "get": {
                 "description": "Search across anchors and users",
@@ -1766,6 +1988,59 @@
                                     "properties": {
                                         "data": {
                                             "$ref": "#/definitions/search.PaginatedAnchorSearchResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/search/combined": {
+            "get": {
+                "description": "Aggregate top results for anchors, users, and tags",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "search"
+                ],
+                "summary": "Combined search for type-ahead",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Search query (min 2 chars)",
+                        "name": "q",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Results per type (default 3, max 10)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/search.UnifiedSearchResponse"
                                         }
                                     }
                                 }
@@ -1935,6 +2210,41 @@
                     }
                 }
             },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Permanently delete the authenticated user's account and all content",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "users"
+                ],
+                "summary": "Delete account",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    }
+                }
+            },
             "patch": {
                 "security": [
                     {
@@ -1986,6 +2296,52 @@
                         "description": "Bad Request",
                         "schema": {
                             "$ref": "#/definitions/response.APIResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/users/me/blocks": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Get list of blocked users",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "safety"
+                ],
+                "summary": "Get blocked users",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/auth.User"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "401": {
@@ -2080,6 +2436,45 @@
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/users/me/interests": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Save interest tags for the authenticated user",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "interests"
+                ],
+                "summary": "Save user interests",
+                "parameters": [
+                    {
+                        "description": "Interest tags",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/interests.SaveInterestsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/response.APIResponse"
                         }
@@ -2223,6 +2618,39 @@
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/users/{id}/block": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "safety"
+                ],
+                "summary": "Block a user",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "User ID to block",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/response.APIResponse"
                         }
@@ -3057,6 +3485,12 @@
                 "bio": {
                     "type": "string"
                 },
+                "blockedUsers": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "coverImageUrl": {
                     "type": "string"
                 },
@@ -3081,6 +3515,12 @@
                 "id": {
                     "type": "string"
                 },
+                "interests": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "isVerified": {
                     "type": "boolean"
                 },
@@ -3101,6 +3541,35 @@
                 },
                 "usernameChangedAt": {
                     "type": "string"
+                }
+            }
+        },
+        "cloudinary.UploadResult": {
+            "type": "object",
+            "properties": {
+                "duration": {
+                    "description": "for audio/video, in seconds",
+                    "type": "number",
+                    "format": "float64"
+                },
+                "fileSize": {
+                    "type": "integer",
+                    "format": "int64"
+                },
+                "format": {
+                    "type": "string"
+                },
+                "height": {
+                    "type": "integer"
+                },
+                "publicID": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                },
+                "width": {
+                    "type": "integer"
                 }
             }
         },
@@ -3720,6 +4189,60 @@
                 }
             }
         },
+        "interests.Category": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "icon": {
+                    "description": "Emoji icon",
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "score": {
+                    "description": "Weighted score based on source",
+                    "type": "integer"
+                },
+                "slug": {
+                    "description": "URL-friendly version",
+                    "type": "string"
+                }
+            }
+        },
+        "interests.SaveInterestsRequest": {
+            "type": "object",
+            "required": [
+                "tags"
+            ],
+            "properties": {
+                "tags": {
+                    "type": "array",
+                    "maxItems": 10,
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "interests.SuggestedInterestsResponse": {
+            "type": "object",
+            "properties": {
+                "basedOn": {
+                    "description": "\"personalized\" or \"popular\"",
+                    "type": "string"
+                },
+                "categories": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/interests.Category"
+                    }
+                }
+            }
+        },
         "likes.LikeActionRequest": {
             "type": "object",
             "required": [
@@ -3991,6 +4514,32 @@
                 }
             }
         },
+        "safety.CreateReportRequest": {
+            "type": "object",
+            "required": [
+                "reason",
+                "targetId",
+                "targetType"
+            ],
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "maxLength": 500,
+                    "minLength": 5
+                },
+                "targetId": {
+                    "type": "string"
+                },
+                "targetType": {
+                    "type": "string",
+                    "enum": [
+                        "anchor",
+                        "item",
+                        "user"
+                    ]
+                }
+            }
+        },
         "search.AnchorSearchMeta": {
             "type": "object",
             "properties": {
@@ -4219,6 +4768,12 @@
                 },
                 "query": {
                     "type": "string"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/search.TagResult"
+                    }
                 },
                 "users": {
                     "$ref": "#/definitions/search.UnifiedSearchUsersResult"

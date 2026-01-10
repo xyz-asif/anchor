@@ -368,3 +368,69 @@ func (h *Handler) enrichUserResults(ctx context.Context, users []UserSearchDoc, 
 
 	return results
 }
+
+// CombinedSearch godoc
+// @Summary Combined search for type-ahead
+// @Description Aggregate top results for anchors, users, and tags
+// @Tags search
+// @Produce json
+// @Param q query string true "Search query (min 2 chars)"
+// @Param limit query int false "Results per type (default 3, max 10)"
+// @Success 200 {object} response.APIResponse{data=UnifiedSearchResponse}
+// @Failure 400 {object} response.APIResponse
+// @Router /search/combined [get]
+func (h *Handler) CombinedSearch(c *gin.Context) {
+	q := c.Query("q")
+	if len(q) < 2 {
+		response.BadRequest(c, "Query too short (min 2 chars)", "INVALID_QUERY")
+		return
+	}
+
+	limit := 3 // Default for type-ahead
+
+	// Get current user if authenticated
+	var currentUserID *primitive.ObjectID
+	if usr, exists := c.Get("user"); exists {
+		if user, ok := usr.(*auth.User); ok {
+			currentUserID = &user.ID
+		}
+	}
+
+	resp := UnifiedSearchResponse{
+		Query: q,
+	}
+
+	// 1. Anchors
+	anchors, totalAnchors, err := h.repo.SearchAnchors(c.Request.Context(), q, nil, SortRelevant, 1, limit)
+	if err == nil {
+		resp.Anchors = &UnifiedSearchAnchorsResult{
+			Items:   h.enrichAnchorResults(c.Request.Context(), anchors),
+			Total:   totalAnchors,
+			HasMore: totalAnchors > int64(limit),
+		}
+	} else {
+		resp.Anchors = &UnifiedSearchAnchorsResult{Items: []SearchAnchorResult{}, Total: 0}
+	}
+
+	// 2. Users
+	users, totalUsers, err := h.repo.SearchUsers(c.Request.Context(), q, 1, limit)
+	if err == nil {
+		resp.Users = &UnifiedSearchUsersResult{
+			Items:   h.enrichUserResults(c.Request.Context(), users, currentUserID),
+			Total:   totalUsers,
+			HasMore: totalUsers > int64(limit),
+		}
+	} else {
+		resp.Users = &UnifiedSearchUsersResult{Items: []SearchUserResult{}, Total: 0}
+	}
+
+	// 3. Tags
+	tags, err := h.repo.SearchTags(c.Request.Context(), q, limit)
+	if err == nil {
+		resp.Tags = tags
+	} else {
+		resp.Tags = []TagResult{}
+	}
+
+	response.Success(c, resp)
+}

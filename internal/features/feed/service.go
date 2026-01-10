@@ -80,7 +80,16 @@ func (s *Service) GetHomeFeed(
 	}
 
 	// 5. Query Anchors
-	anchorsList, err := s.feedRepo.GetFeedAnchors(ctx, feedUserIDs, cursor, query.Limit+1)
+	// Get blocked users
+	var blockedUserIDs []primitive.ObjectID
+	// Need to fetch user to get blocked list.
+	// Optimization: pass user object to Service? Or fetch here.
+	currentUser, err := s.authRepo.GetUserByObjectID(ctx, userID)
+	if err == nil && currentUser != nil {
+		blockedUserIDs = currentUser.BlockedUsers
+	}
+
+	anchorsList, err := s.feedRepo.GetFeedAnchors(ctx, feedUserIDs, blockedUserIDs, cursor, query.Limit+1)
 	if err != nil {
 		return nil, err
 	}
@@ -447,8 +456,16 @@ func (s *Service) GetDiscoverFeed(
 	}
 
 	// 4. Query anchors
+	var blockedUserIDs []primitive.ObjectID
+	if isAuthenticated {
+		currentUser, err := s.authRepo.GetUserByObjectID(ctx, *userID)
+		if err == nil && currentUser != nil {
+			blockedUserIDs = currentUser.BlockedUsers
+		}
+	}
+
 	anchorsList, err := s.feedRepo.GetDiscoverAnchors(
-		ctx, excludeUserIDs, query.Category, tagPtr, cursor, query.Limit+1,
+		ctx, excludeUserIDs, blockedUserIDs, query.Category, tagPtr, cursor, query.Limit+1,
 	)
 	if err != nil {
 		return nil, err

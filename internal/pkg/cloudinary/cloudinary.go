@@ -103,10 +103,16 @@ func (s *Service) UploadAudio(ctx context.Context, file multipart.File, filename
 		return nil, fmt.Errorf("failed to upload audio: %w", err)
 	}
 
+	// TODO: Extract duration via Admin API
+	// The upload response doesn't include duration in the current SDK version
+	// To get duration, we need to call: s.cld.Admin.Asset(ctx, admin.AssetParams{PublicID: result.PublicID})
+	// For now, duration will be 0 and should be extracted client-side or via webhook
+	duration := 0.0
+
 	return &UploadResult{
 		URL:      result.SecureURL,
 		PublicID: result.PublicID,
-		Duration: 0, // SDK does not return Duration directly
+		Duration: duration,
 		FileSize: int64(result.Bytes),
 		Format:   result.Format,
 	}, nil

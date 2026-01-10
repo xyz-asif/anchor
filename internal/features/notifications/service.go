@@ -38,6 +38,11 @@ func (s *Service) CreateCommentNotifications(ctx context.Context, comment *Comme
 			continue
 		}
 
+		// Check if Recipient has blocked Actor
+		if s.isBlocked(ctx, mentionedUserID, actor.ID) {
+			continue
+		}
+
 		notifications = append(notifications, Notification{
 			RecipientID:  mentionedUserID,
 			ActorID:      actor.ID,
@@ -54,15 +59,18 @@ func (s *Service) CreateCommentNotifications(ctx context.Context, comment *Comme
 	// - Commenter is anchor owner (self-comment)
 	// - Anchor owner was already mentioned (avoid duplicate)
 	if anchorUserID != actor.ID && !containsID(comment.Mentions, anchorUserID) {
-		notifications = append(notifications, Notification{
-			RecipientID:  anchorUserID,
-			ActorID:      actor.ID,
-			Type:         TypeComment,
-			ResourceType: "anchor",
-			ResourceID:   anchorID,
-			AnchorID:     &anchorID,
-			Preview:      truncate(comment.Content, 100),
-		})
+		// Check if Owner has blocked Actor
+		if !s.isBlocked(ctx, anchorUserID, actor.ID) {
+			notifications = append(notifications, Notification{
+				RecipientID:  anchorUserID,
+				ActorID:      actor.ID,
+				Type:         TypeComment,
+				ResourceType: "anchor",
+				ResourceID:   anchorID,
+				AnchorID:     &anchorID,
+				Preview:      truncate(comment.Content, 100),
+			})
+		}
 	}
 
 	// Batch insert
@@ -96,6 +104,11 @@ func (s *Service) CreateEditCommentNotifications(ctx context.Context, comment *C
 	for _, mentionedUserID := range newMentions {
 		// Skip self-mention
 		if mentionedUserID == actor.ID {
+			continue
+		}
+
+		// Check if Recipient has blocked Actor
+		if s.isBlocked(ctx, mentionedUserID, actor.ID) {
 			continue
 		}
 
@@ -142,6 +155,11 @@ func (s *Service) CreateLikeNotification(ctx context.Context, anchorID primitive
 		return nil
 	}
 
+	// Check if Owner has blocked Actor
+	if s.isBlocked(ctx, ownerID, actorID) {
+		return nil
+	}
+
 	notification := Notification{
 		RecipientID:  ownerID,
 		ActorID:      actorID,
@@ -159,6 +177,11 @@ func (s *Service) CreateLikeNotification(ctx context.Context, anchorID primitive
 func (s *Service) CreateFollowNotification(ctx context.Context, actorID, targetUserID primitive.ObjectID) error {
 	// No self-notification
 	if actorID == targetUserID {
+		return nil
+	}
+
+	// Check if Target (Recipient) has blocked Actor
+	if s.isBlocked(ctx, targetUserID, actorID) {
 		return nil
 	}
 
@@ -182,6 +205,11 @@ func (s *Service) CreateCloneNotification(ctx context.Context, clonedAnchorID, o
 		return nil
 	}
 
+	// Check if Owner has blocked Actor
+	if s.isBlocked(ctx, ownerID, actorID) {
+		return nil
+	}
+
 	notification := Notification{
 		RecipientID:  ownerID,
 		ActorID:      actorID,
@@ -193,4 +221,18 @@ func (s *Service) CreateCloneNotification(ctx context.Context, clonedAnchorID, o
 	}
 
 	return s.repo.CreateNotification(ctx, &notification)
+}
+
+func (s *Service) isBlocked(ctx context.Context, recipientID, actorID primitive.ObjectID) bool {
+	user, err := s.authRepo.GetUserByObjectID(ctx, recipientID)
+	if err != nil || user == nil {
+		return false // Default to not blocked if error (or handle differently?)
+		// If user doesn't exist, we can't block.
+	}
+	for _, id := range user.BlockedUsers {
+		if id == actorID {
+			return true
+		}
+	}
+	return false
 }

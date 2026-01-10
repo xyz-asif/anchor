@@ -304,3 +304,9 @@ func (r *Repository) GetUserIDsByUsernames(ctx context.Context, usernames []stri
 
 	return result, nil
 }
+
+// DeleteUser permanently removes a user from the database
+func (r *Repository) DeleteUser(ctx context.Context, userID primitive.ObjectID) error {
+	_, err := r.collection.DeleteOne(ctx, bson.M{"_id": userID})
+	return err
+}

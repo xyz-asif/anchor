@@ -8,25 +8,27 @@ import (
 
 // User represents a registered user in the system
 type User struct {
-	ID                     primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	GoogleID               string             `bson:"googleId" json:"googleId"`
-	Email                  string             `bson:"email" json:"email"`
-	Username               string             `bson:"username" json:"username"`
-	UsernameChanged        bool               `bson:"usernameChanged" json:"usernameChanged"`
-	UsernameChangedAt      *time.Time         `bson:"usernameChangedAt" json:"usernameChangedAt"`
-	DisplayName            string             `bson:"displayName" json:"displayName"`
-	Bio                    string             `bson:"bio" json:"bio"`
-	ProfilePictureURL      string             `bson:"profilePictureUrl" json:"profilePictureUrl"`
-	ProfilePicturePublicID string             `bson:"profilePicturePublicId" json:"-"`
-	CoverImageURL          string             `bson:"coverImageUrl" json:"coverImageUrl"`
-	CoverImagePublicID     string             `bson:"coverImagePublicId" json:"-"`
-	FollowerCount          int                `bson:"followerCount" json:"followerCount"`
-	FollowingCount         int                `bson:"followingCount" json:"followingCount"`
-	AnchorCount            int                `bson:"anchorCount" json:"anchorCount"`
-	IsVerified             bool               `bson:"isVerified" json:"isVerified"`
-	JoinedAt               time.Time          `bson:"joinedAt" json:"joinedAt"`
-	CreatedAt              time.Time          `bson:"createdAt" json:"createdAt"`
-	UpdatedAt              time.Time          `bson:"updatedAt" json:"updatedAt"`
+	ID                     primitive.ObjectID   `bson:"_id,omitempty" json:"id"`
+	GoogleID               string               `bson:"googleId" json:"googleId"`
+	Email                  string               `bson:"email" json:"email"`
+	Username               string               `bson:"username" json:"username"`
+	UsernameChanged        bool                 `bson:"usernameChanged" json:"usernameChanged"`
+	UsernameChangedAt      *time.Time           `bson:"usernameChangedAt" json:"usernameChangedAt"`
+	DisplayName            string               `bson:"displayName" json:"displayName"`
+	Bio                    string               `bson:"bio" json:"bio"`
+	ProfilePictureURL      string               `bson:"profilePictureUrl" json:"profilePictureUrl"`
+	ProfilePicturePublicID string               `bson:"profilePicturePublicId" json:"-"`
+	CoverImageURL          string               `bson:"coverImageUrl" json:"coverImageUrl"`
+	CoverImagePublicID     string               `bson:"coverImagePublicId" json:"-"`
+	FollowerCount          int                  `bson:"followerCount" json:"followerCount"`
+	FollowingCount         int                  `bson:"followingCount" json:"followingCount"`
+	AnchorCount            int                  `bson:"anchorCount" json:"anchorCount"`
+	IsVerified             bool                 `bson:"isVerified" json:"isVerified"`
+	JoinedAt               time.Time            `bson:"joinedAt" json:"joinedAt"`
+	CreatedAt              time.Time            `bson:"createdAt" json:"createdAt"`
+	UpdatedAt              time.Time            `bson:"updatedAt" json:"updatedAt"`
+	Interests              []string             `bson:"interests" json:"interests"`
+	BlockedUsers           []primitive.ObjectID `bson:"blockedUsers" json:"blockedUsers"`
 }
 
 // GoogleAuthRequest represents the payload for Google OAuth login

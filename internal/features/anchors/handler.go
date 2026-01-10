@@ -3,6 +3,7 @@ package anchors
 import (
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -89,6 +90,11 @@ func (h *Handler) CreateAnchor(c *gin.Context) {
 	}
 	if req.CoverMediaValue != nil {
 		coverMediaValue = *req.CoverMediaValue
+	}
+
+	// Normalize tags
+	if req.Tags != nil {
+		req.Tags = normalizeTags(req.Tags)
 	}
 
 	anchor := &Anchor{
@@ -193,7 +199,7 @@ func (h *Handler) UpdateAnchor(c *gin.Context) {
 		updates["visibility"] = *req.Visibility
 	}
 	if req.Tags != nil {
-		updates["tags"] = req.Tags
+		updates["tags"] = normalizeTags(req.Tags)
 	}
 
 	if len(updates) == 0 {
@@ -216,6 +222,24 @@ func (h *Handler) UpdateAnchor(c *gin.Context) {
 	}
 
 	response.Success(c, updatedAnchor)
+}
+
+// normalizeTags converts tags to lowercase and trims whitespace
+func normalizeTags(tags []string) []string {
+	if tags == nil {
+		return nil
+	}
+	normalized := make([]string, 0, len(tags))
+	seen := make(map[string]bool)
+
+	for _, t := range tags {
+		trimmed := strings.TrimSpace(strings.ToLower(t))
+		if trimmed != "" && !seen[trimmed] {
+			normalized = append(normalized, trimmed)
+			seen[trimmed] = true
+		}
+	}
+	return normalized
 }
 
 // DeleteAnchor soft deletes an anchor

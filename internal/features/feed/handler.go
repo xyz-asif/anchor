@@ -118,3 +118,63 @@ func (h *Handler) GetDiscoverFeed(c *gin.Context) {
 
 	response.Success(c, discoverResponse)
 }
+
+// GetTagFeed godoc
+// @Summary Get tag feed
+// @Description Get public anchors for a specific tag
+// @Tags feed
+// @Produce json
+// @Param tagName path string true "Tag name"
+// @Param limit query int false "Items per page (default 20, max 50)"
+// @Param cursor query string false "Pagination cursor"
+// @Success 200 {object} response.APIResponse{data=DiscoverResponse}
+// @Failure 400 {object} response.APIResponse
+// @Router /feed/tags/{tagName} [get]
+func (h *Handler) GetTagFeed(c *gin.Context) {
+	tagName := c.Param("tagName")
+	if len(tagName) < 2 {
+		response.Error(c, http.StatusBadRequest, "Invalid tag name")
+		return
+	}
+
+	// Get user if authenticated (optional)
+	var userID *primitive.ObjectID
+	if usr, exists := c.Get("user"); exists {
+		if user, ok := usr.(*auth.User); ok {
+			userID = &user.ID
+		}
+	}
+
+	var query DiscoverQuery
+	if err := c.ShouldBindQuery(&query); err != nil {
+		response.Error(c, http.StatusBadRequest, "Invalid query parameters")
+		return
+	}
+
+	// Force tag from path
+	query.Tag = tagName
+	if query.Category == "" {
+		query.Category = "popular" // Default sort for tag feed
+	}
+
+	if err := ValidateDiscoverQuery(&query); err != nil {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if query.Cursor != "" {
+		if _, err := DecodeDiscoverCursor(query.Cursor); err != nil {
+			response.Error(c, http.StatusBadRequest, "Invalid cursor")
+			return
+		}
+	}
+
+	// Reuse Discover Feed logic
+	discoverResponse, err := h.service.GetDiscoverFeed(c.Request.Context(), userID, &query)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "Failed to retrieve tag feed")
+		return
+	}
+
+	response.Success(c, discoverResponse)
+}

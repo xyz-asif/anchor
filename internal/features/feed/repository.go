@@ -43,6 +43,7 @@ func (r *Repository) ensureIndexes() {
 func (r *Repository) GetFeedAnchors(
 	ctx context.Context,
 	userIDs []primitive.ObjectID,
+	blockedUserIDs []primitive.ObjectID, // New param
 	cursor *FeedCursor,
 	limit int,
 ) ([]anchors.Anchor, error) {
@@ -51,6 +52,12 @@ func (r *Repository) GetFeedAnchors(
 		"userId":     bson.M{"$in": userIDs},
 		"visibility": bson.M{"$in": []string{"public", "unlisted"}},
 		"deletedAt":  nil,
+	}
+
+	// Filter out blocked users if provided (though userIDs should already be filtered by service)
+	// But as a safeguard:
+	if len(blockedUserIDs) > 0 {
+		filter["userId"] = bson.M{"$in": userIDs, "$nin": blockedUserIDs}
 	}
 
 	// Apply cursor pagination if present
@@ -150,6 +157,7 @@ func (r *Repository) GetUserClonedAnchors(
 func (r *Repository) GetDiscoverAnchors(
 	ctx context.Context,
 	excludeUserIDs []primitive.ObjectID,
+	blockedUserIDs []primitive.ObjectID, // New param
 	category string,
 	tag *string,
 	cursor *DiscoverCursor,
@@ -161,9 +169,32 @@ func (r *Repository) GetDiscoverAnchors(
 		"deletedAt":  nil,
 	}
 
-	// Exclude followed users and self
-	if len(excludeUserIDs) > 0 {
-		filter["userId"] = bson.M{"$nin": excludeUserIDs}
+	// Exclude followed users, self, AND blocked users
+	allExcluded := excludeUserIDs
+	allExcluded = append(allExcluded, blockedUserIDs...)
+
+	if len(allExcluded) > 0 {
+		filter["userId"] = bson.M{"$nin": allExcluded}
+	}
+
+	// Filter out blocked users (combine with excludeUserIDs if needed, but separate is cleaner)
+	if len(blockedUserIDs) > 0 {
+		// If excludeUserIDs exists, merge
+		if _, ok := filter["userId"]; ok {
+			// Already has $nin, need to merge lists?
+			// MongoDB $nin can take a combined list.
+			// Ideally service should combine them.
+			// But here we can use $and if needed, but $nin merger is better.
+			// For simplicity, let's assume service merges them into excludeUserIDs?
+			// No, signature change requested in plan.
+			// Let's assume we update signature and handle logic.
+
+			// Actually, just append blockedUserIDs to excludeUserIDs in Service is easier?
+			// But let's follow the pattern and add it to signature if I can.
+			// If I add to signature, I should merge it here.
+		} else {
+			filter["userId"] = bson.M{"$nin": blockedUserIDs}
+		}
 	}
 
 	// Tag filter

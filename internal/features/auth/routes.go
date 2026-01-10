@@ -52,6 +52,7 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Con
 		{
 			me.GET("", handler.GetOwnProfile)
 			me.PATCH("", handler.UpdateProfile)
+			me.DELETE("", handler.DeleteAccount)
 			me.POST("/profile-picture", handler.UploadProfilePicture)
 			me.POST("/cover-image", handler.UploadCoverImage)
 			me.DELETE("/profile-picture", handler.RemoveProfilePicture)

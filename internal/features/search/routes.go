@@ -26,6 +26,7 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Con
 	search.Use(optionalAuth)
 	{
 		search.GET("", handler.UnifiedSearch)
+		search.GET("/combined", handler.CombinedSearch)
 		search.GET("/anchors", handler.SearchAnchors)
 		search.GET("/users", handler.SearchUsers)
 		search.GET("/tags", handler.SearchTags)
