@@ -291,6 +291,65 @@
                 }
             }
         },
+        "/anchors/{id}/clones": {
+            "get": {
+                "description": "Get paginated list of clones for an anchor",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "anchors"
+                ],
+                "summary": "Get clones of an anchor",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Anchor ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page number",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Limit per page",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/anchors.AnchorClonesResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/anchors/{id}/comments": {
             "get": {
                 "description": "Get paginated list of comments",
@@ -437,6 +496,186 @@
                         "description": "Forbidden",
                         "schema": {
                             "$ref": "#/definitions/response.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/anchors/{id}/follow": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Follow or unfollow an anchor to track updates",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "anchor-follows"
+                ],
+                "summary": "Follow or unfollow an anchor",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Anchor ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Follow action",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/anchor_follows.FollowAnchorRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/anchor_follows.FollowAnchorResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/anchors/{id}/follow/notifications": {
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Enable or disable notifications when anchor is updated",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "anchor-follows"
+                ],
+                "summary": "Toggle update notifications for followed anchor",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Anchor ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Notification preference",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/anchor_follows.ToggleNotificationsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/anchors/{id}/follow/status": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Check if current user is following an anchor and get update status",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "anchor-follows"
+                ],
+                "summary": "Get follow status for an anchor",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Anchor ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/anchor_follows.FollowStatusResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "404": {
@@ -1081,6 +1320,41 @@
                 }
             }
         },
+        "/auth/username/check": {
+            "get": {
+                "description": "Check if a username is available for registration",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Check if username is available",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Username to check (3-20 chars)",
+                        "name": "username",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/comments/{id}": {
             "get": {
                 "description": "Get comment by ID",
@@ -1539,7 +1813,7 @@
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/feed.FeedResponse"
+                                            "$ref": "#/definitions/feed.HomeFeedResponse"
                                         }
                                     }
                                 }
@@ -2572,6 +2846,69 @@
                 }
             }
         },
+        "/users/me/following-anchors": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Get all anchors the current user is following with update status",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "anchor-follows"
+                ],
+                "summary": "List anchors user is following",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Page number (default 1)",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Items per page (default 20, max 50)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Filter only anchors with updates",
+                        "name": "hasUpdates",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Sort: recent, updated, alphabetical",
+                        "name": "sort",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/anchor_follows.ListFollowingAnchorsResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
         "/users/me/interests": {
             "post": {
                 "security": [
@@ -2701,6 +3038,53 @@
                 }
             }
         },
+        "/users/username/{username}": {
+            "get": {
+                "description": "Get public profile of a user by their username",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "users"
+                ],
+                "summary": "Get user profile by username",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Username",
+                        "name": "username",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/auth.PublicProfileResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/users/{id}": {
             "get": {
                 "description": "Get a user's public profile by ID",
@@ -2780,6 +3164,84 @@
                 "responses": {
                     "200": {
                         "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "safety"
+                ],
+                "summary": "Unblock a user",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "User ID to unblock",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/users/{id}/clones": {
+            "get": {
+                "description": "Get paginated list of anchors cloned by a user",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "users"
+                ],
+                "summary": "Get user's cloned anchors",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "User ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page number (default 1)",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Items per page (default 20, max 50)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "$ref": "#/definitions/response.APIResponse"
                         }
@@ -2999,6 +3461,53 @@
                 }
             }
         },
+        "/users/{id}/likes": {
+            "get": {
+                "description": "Get paginated list of anchors liked by a user",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "users"
+                ],
+                "summary": "Get user's liked anchors",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "User ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page number (default 1)",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Items per page (default 20, max 50)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/response.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/users/{id}/pinned": {
             "get": {
                 "description": "Get pinned anchors for a specific user",
@@ -3057,6 +3566,190 @@
         }
     },
     "definitions": {
+        "anchor_follows.AuthorInfo": {
+            "type": "object",
+            "properties": {
+                "displayName": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "isVerified": {
+                    "type": "boolean"
+                },
+                "profilePictureUrl": {
+                    "type": "string"
+                },
+                "username": {
+                    "type": "string"
+                }
+            }
+        },
+        "anchor_follows.FollowAnchorRequest": {
+            "type": "object",
+            "required": [
+                "action"
+            ],
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "follow",
+                        "unfollow"
+                    ]
+                },
+                "notifyOnUpdate": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "anchor_follows.FollowAnchorResponse": {
+            "type": "object",
+            "properties": {
+                "followerCount": {
+                    "type": "integer"
+                },
+                "isFollowing": {
+                    "type": "boolean"
+                },
+                "notifyOnUpdate": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "anchor_follows.FollowStatusResponse": {
+            "type": "object",
+            "properties": {
+                "currentVersion": {
+                    "type": "integer"
+                },
+                "followedAt": {
+                    "type": "string"
+                },
+                "hasUpdates": {
+                    "type": "boolean"
+                },
+                "isFollowing": {
+                    "type": "boolean"
+                },
+                "lastSeenVersion": {
+                    "type": "integer"
+                },
+                "notifyOnUpdate": {
+                    "type": "boolean"
+                },
+                "updatesSinceLastSeen": {
+                    "type": "integer"
+                }
+            }
+        },
+        "anchor_follows.FollowingAnchorItem": {
+            "type": "object",
+            "properties": {
+                "author": {
+                    "$ref": "#/definitions/anchor_follows.AuthorInfo"
+                },
+                "currentVersion": {
+                    "type": "integer"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "followedAt": {
+                    "type": "string"
+                },
+                "followerCount": {
+                    "type": "integer"
+                },
+                "hasUpdates": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "itemCount": {
+                    "type": "integer"
+                },
+                "lastItemAddedAt": {
+                    "type": "string"
+                },
+                "lastSeenVersion": {
+                    "type": "integer"
+                },
+                "likeCount": {
+                    "type": "integer"
+                },
+                "notifyOnUpdate": {
+                    "type": "boolean"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updatesSinceLastSeen": {
+                    "type": "integer"
+                },
+                "visibility": {
+                    "type": "string"
+                }
+            }
+        },
+        "anchor_follows.ListFollowingAnchorsResponse": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/anchor_follows.FollowingAnchorItem"
+                    }
+                },
+                "meta": {
+                    "type": "object",
+                    "properties": {
+                        "sort": {
+                            "type": "string"
+                        },
+                        "totalWithUpdates": {
+                            "type": "integer"
+                        }
+                    }
+                },
+                "pagination": {
+                    "type": "object",
+                    "properties": {
+                        "hasMore": {
+                            "type": "boolean"
+                        },
+                        "limit": {
+                            "type": "integer"
+                        },
+                        "page": {
+                            "type": "integer"
+                        },
+                        "total": {
+                            "type": "integer"
+                        },
+                        "totalPages": {
+                            "type": "integer"
+                        }
+                    }
+                }
+            }
+        },
+        "anchor_follows.ToggleNotificationsRequest": {
+            "type": "object",
+            "properties": {
+                "notifyOnUpdate": {
+                    "type": "boolean"
+                }
+            }
+        },
         "anchors.Anchor": {
             "type": "object",
             "properties": {
@@ -3091,6 +3784,10 @@
                 "engagementScore": {
                     "type": "integer"
                 },
+                "followerCount": {
+                    "description": "How many users follow this anchor",
+                    "type": "integer"
+                },
                 "id": {
                     "type": "string"
                 },
@@ -3121,12 +3818,81 @@
                 "userId": {
                     "type": "string"
                 },
+                "version": {
+                    "description": "Increments when items added",
+                    "type": "integer"
+                },
                 "viewCount": {
                     "type": "integer"
                 },
                 "visibility": {
                     "description": "\"private\", \"unlisted\", \"public\"",
                     "type": "string"
+                }
+            }
+        },
+        "anchors.AnchorCloneItem": {
+            "type": "object",
+            "properties": {
+                "cloner": {
+                    "$ref": "#/definitions/anchors.AnchorClonerInfo"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "anchors.AnchorClonerInfo": {
+            "type": "object",
+            "properties": {
+                "displayName": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "profilePictureUrl": {
+                    "type": "string"
+                },
+                "username": {
+                    "type": "string"
+                }
+            }
+        },
+        "anchors.AnchorClonesResponse": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/anchors.AnchorCloneItem"
+                    }
+                },
+                "pagination": {
+                    "type": "object",
+                    "properties": {
+                        "hasMore": {
+                            "type": "boolean"
+                        },
+                        "limit": {
+                            "type": "integer"
+                        },
+                        "page": {
+                            "type": "integer"
+                        },
+                        "total": {
+                            "type": "integer"
+                        },
+                        "totalPages": {
+                            "type": "integer"
+                        }
+                    }
                 }
             }
         },
@@ -4208,6 +4974,74 @@
                 },
                 "pagination": {
                     "$ref": "#/definitions/feed.FeedPagination"
+                }
+            }
+        },
+        "feed.FollowingAnchorFeedItem": {
+            "type": "object",
+            "properties": {
+                "coverMediaType": {
+                    "type": "string"
+                },
+                "coverMediaValue": {
+                    "type": "string"
+                },
+                "currentVersion": {
+                    "type": "integer"
+                },
+                "hasUpdate": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "lastSeenVersion": {
+                    "type": "integer"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "feed.FollowingAnchorsSection": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/feed.FollowingAnchorFeedItem"
+                    }
+                },
+                "totalCount": {
+                    "type": "integer"
+                }
+            }
+        },
+        "feed.HomeFeedResponse": {
+            "type": "object",
+            "properties": {
+                "feed": {
+                    "$ref": "#/definitions/feed.FeedResponse"
+                },
+                "followingAnchors": {
+                    "$ref": "#/definitions/feed.FollowingAnchorsSection"
+                },
+                "suggestedCategories": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/feed.SuggestedCategory"
+                    }
+                }
+            }
+        },
+        "feed.SuggestedCategory": {
+            "type": "object",
+            "properties": {
+                "anchorCount": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
                 }
             }
         },

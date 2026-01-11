@@ -103,6 +103,47 @@ func (h *Handler) BlockUser(c *gin.Context) {
 	response.Success(c, "User blocked successfully")
 }
 
+// @Summary Unblock a user
+// @Tags safety
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "User ID to unblock"
+// @Success 200 {object} response.APIResponse
+// @Router /users/{id}/block [delete]
+func (h *Handler) UnblockUser(c *gin.Context) {
+	targetIDStr := c.Param("id")
+	targetID, err := primitive.ObjectIDFromHex(targetIDStr)
+	if err != nil {
+		response.BadRequest(c, "Invalid user ID", "INVALID_ID")
+		return
+	}
+
+	val, exists := c.Get("user")
+	if !exists {
+		response.Unauthorized(c, "Authentication required", "AUTH_FAILED")
+		return
+	}
+	user, ok := val.(*auth.User)
+	if !ok {
+		response.InternalServerError(c, "User context error", "INTERNAL_ERROR")
+		return
+	}
+
+	if targetID == user.ID {
+		response.BadRequest(c, "INVALID_ACTION", "Cannot unblock yourself")
+		return
+	}
+
+	if err := h.repo.RemoveBlock(c.Request.Context(), user.ID, targetID); err != nil {
+		response.InternalServerError(c, "Failed to unblock user", "DATABASE_ERROR")
+		return
+	}
+
+	response.Success(c, gin.H{
+		"message": "User unblocked successfully",
+	})
+}
+
 // GetBlockedUsers returns the list of users blocked by the current user
 // @Summary Get blocked users
 // @Description Get list of blocked users

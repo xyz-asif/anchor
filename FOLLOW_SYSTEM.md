@@ -586,3 +586,73 @@ Create `routes.go` and register in main routes file
 ### Notifications (Separate module)
 - Notify when someone follows you
 - Notify when mutual follow happens
+
+---
+
+# Anchor Follow System
+
+## Overview
+
+The Anchor Follow System allows users to subscribe to specific anchors. This enables granular tracking of content collections, update notifications, and a prioritized view of specific topics in the Home Feed.
+
+## API Summary
+
+| # | Method | Endpoint | Auth | Description |
+|---|--------|----------|------|-------------|
+| 1 | `POST` | `/anchors/:id/follow` | Required | Follow/unfollow an anchor |
+| 2 | `GET` | `/anchors/:id/follow/status` | Required | Check anchor follow status |
+| 3 | `PATCH` | `/anchors/:id/follow/notifications` | Required | Toggle update notifications |
+| 4 | `GET` | `/users/me/following-anchors` | Required | List user's followed anchors |
+
+## Data Models
+
+### Anchor Follow Collection (`anchor_follows`)
+
+```go
+type AnchorFollow struct {
+    ID              primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+    UserID          primitive.ObjectID `bson:"userId" json:"userId"`
+    AnchorID        primitive.ObjectID `bson:"anchorId" json:"anchorId"`
+    NotifyOnUpdate  bool               `bson:"notifyOnUpdate" json:"notifyOnUpdate"`
+    LastSeenVersion int                `bson:"lastSeenVersion" json:"lastSeenVersion"`
+    CreatedAt       time.Time          `bson:"createdAt" json:"createdAt"`
+}
+```
+
+## Database Indexes
+
+```go
+// 1. Unique compound index
+{
+    Keys: bson.D{
+        {Key: "userId", Value: 1},
+        {Key: "anchorId", Value: 1}
+    },
+    Options: options.Index().SetUnique(true)
+}
+
+// 2. Query followed anchors for a user
+{
+    Keys: bson.D{
+        {Key: "userId", Value: 1},
+        {Key: "createdAt", Value: -1}
+    }
+}
+```
+
+## Business Rules
+
+1. **Update Tracking**: Each anchor has a `version` field that increments when items are added.
+2. **Notifications**: Users can toggle `notifyOnUpdate`. If `true`, adding an item to the anchor sends a notification to the follower.
+3. **Feed Integration**: Followed anchors with `Anchor.Version > Follow.LastSeenVersion` are highlighted in the "Following" section of the Home Feed.
+4. **Counters**: Following an anchor increments the `followerCount` on the Anchor model.
+
+## Implementation Structure
+
+```
+internal/features/anchor_follows/
+├── model.go       # DTOs and AnchorFollow struct
+├── repository.go  # MongoDB operations
+├── handler.go     # API Handlers
+└── routes.go      # Route registration
+```

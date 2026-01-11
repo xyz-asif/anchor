@@ -67,84 +67,92 @@ GET /feed/following?limit=20&includeOwn=false
     "statusCode": 200,
     "message": "success",
     "data": {
-        "items": [
-            {
-                "id": "507f1f77bcf86cd799439011",
-                "title": "Tech Resources 2024",
-                "description": "My curated collection of tech links",
-                "coverMediaType": "emoji",
-                "coverMediaValue": "💻",
-                "visibility": "public",
-                "isPinned": false,
-                "tags": ["tech", "programming"],
-                "itemCount": 25,
-                "likeCount": 55,
-                "cloneCount": 10,
-                "commentCount": 5,
-                "lastItemAddedAt": "2024-01-15T10:30:00Z",
-                "createdAt": "2024-01-10T00:00:00Z",
-                
-                "author": {
-                    "id": "507f1f77bcf86cd799439012",
-                    "username": "@johndoe",
-                    "displayName": "John Doe",
-                    "profilePicture": "https://cloudinary.com/...",
-                    "isVerified": false
-                },
-                
-                "engagement": {
-                    "hasLiked": true,
-                    "hasCloned": false,
-                    "likeSummary": {
-                        "totalCount": 55,
-                        "likedByFollowing": [
-                            {
-                                "id": "507f1f77bcf86cd799439020",
-                                "username": "@alice",
-                                "displayName": "Alice Smith",
-                                "profilePicture": "https://..."
-                            },
-                            {
-                                "id": "507f1f77bcf86cd799439021",
-                                "username": "@bob",
-                                "displayName": "Bob Jones",
-                                "profilePicture": null
-                            }
-                        ],
-                        "otherLikersCount": 53
-                    }
-                },
-                
-                "preview": {
-                    "items": [
-                        {
-                            "type": "url",
-                            "thumbnail": "https://github.com/favicon.ico",
-                            "title": "GitHub - Where the world builds software"
-                        },
-                        {
-                            "type": "image",
-                            "thumbnail": "https://cloudinary.com/..."
-                        },
-                        {
-                            "type": "text",
-                            "snippet": "This is a collection of my favorite programming resources..."
-                        }
-                    ]
+        "followingAnchors": {
+            "items": [
+                {
+                    "id": "507f1f77bcf86cd799439011",
+                    "title": "Tech Resources 2024",
+                    "coverMediaType": "emoji",
+                    "coverMediaValue": "💻",
+                    "hasUpdate": true,
+                    "lastSeenVersion": 5,
+                    "currentVersion": 8
                 }
+            ],
+            "totalCount": 1
+        },
+        "suggestedCategories": [
+            {
+                "name": "Technology",
+                "anchorCount": 150
             }
         ],
-        "pagination": {
-            "limit": 20,
-            "hasMore": true,
-            "nextCursor": "eyJ0IjoiMjAyNC0wMS0xNFQwODoyMDowMFoiLCJpIjoiNTA3ZjFmNzdiY2Y4NmNkNzk5NDM5MDEwIn0=",
-            "itemCount": 20
-        },
-        "meta": {
-            "feedType": "following",
-            "includesOwnAnchors": true,
-            "totalFollowing": 150,
-            "emptyReason": null
+        "feed": {
+            "items": [
+                {
+                    "id": "507f1f77bcf86cd799439011",
+                    "title": "Tech Resources 2024",
+                    "description": "My curated collection of tech links",
+                    "coverMediaType": "emoji",
+                    "coverMediaValue": "💻",
+                    "visibility": "public",
+                    "isPinned": false,
+                    "tags": ["tech", "programming"],
+                    "itemCount": 25,
+                    "likeCount": 55,
+                    "cloneCount": 10,
+                    "commentCount": 5,
+                    "lastItemAddedAt": "2024-01-15T10:30:00Z",
+                    "createdAt": "2024-01-10T00:00:00Z",
+                    
+                    "author": {
+                        "id": "507f1f77bcf86cd799439012",
+                        "username": "@johndoe",
+                        "displayName": "John Doe",
+                        "profilePicture": "https://cloudinary.com/...",
+                        "isVerified": false
+                    },
+                    
+                    "engagement": {
+                        "hasLiked": true,
+                        "hasCloned": false,
+                        "likeSummary": {
+                            "totalCount": 55,
+                            "likedByFollowing": [
+                                {
+                                    "id": "507f1f77bcf86cd799439020",
+                                    "username": "@alice",
+                                    "displayName": "Alice Smith",
+                                    "profilePicture": "https://..."
+                                }
+                            ],
+                            "otherLikersCount": 54
+                        }
+                    },
+                    
+                    "preview": {
+                        "items": [
+                            {
+                                "type": "url",
+                                "thumbnail": "https://github.com/favicon.ico",
+                                "title": "GitHub"
+                            }
+                        ]
+                    }
+                }
+            ],
+            "pagination": {
+                "limit": 20,
+                "hasMore": true,
+                "nextCursor": "eyJ0IjoiMjAyNC0wMS0xNFQwODoyMDowMFoiLCJpIjoiNTA3ZjFmNzdiY2Y4NmNkNzk5NDM5MDEwIn0=",
+                "itemCount": 1
+            },
+            "meta": {
+                "feedType": "following",
+                "includesOwnAnchors": true,
+                "totalFollowing": 150,
+                "emptyReason": null
+            }
         }
     }
 }
@@ -409,11 +417,34 @@ type FeedMeta struct {
     EmptyReason        *string `json:"emptyReason"`
 }
 
-// FeedResponse represents the complete feed response
-type FeedResponse struct {
-    Items      []FeedItem     `json:"items"`
-    Pagination FeedPagination `json:"pagination"`
-    Meta       FeedMeta       `json:"meta"`
+// FollowingAnchorFeedItem represents an anchor with update status
+type FollowingAnchorFeedItem struct {
+    ID              primitive.ObjectID `json:"id"`
+    Title           string             `json:"title"`
+    CoverMediaType  string             `json:"coverMediaType"`
+    CoverMediaValue string             `json:"coverMediaValue"`
+    HasUpdate       bool               `json:"hasUpdate"`
+    LastSeenVersion int                `json:"lastSeenVersion"`
+    CurrentVersion  int                `json:"currentVersion"`
+}
+
+// FollowingAnchorsSection represents the section of followed anchors
+type FollowingAnchorsSection struct {
+    Items      []FollowingAnchorFeedItem `json:"items"`
+    TotalCount int                       `json:"totalCount"`
+}
+
+// SuggestedCategory represents a tag recommendation
+type SuggestedCategory struct {
+    Name        string `json:"name"`
+    AnchorCount int    `json:"anchorCount"`
+}
+
+// HomeFeedResponse represents the updated complete feed response
+type HomeFeedResponse struct {
+    FollowingAnchors    FollowingAnchorsSection `json:"followingAnchors"`
+    SuggestedCategories []SuggestedCategory     `json:"suggestedCategories"`
+    Feed                FeedResponse            `json:"feed"`
 }
 ```
 
@@ -421,10 +452,26 @@ type FeedResponse struct {
 
 ## Business Logic
 
-### Feed Generation Algorithm
+### Home Feed Generation Algorithm
 
 ```
 Function GetHomeFeed(currentUserID, limit, cursor, includeOwn):
+
+    1. GET HORIZONTAL SECTIONS (Parallel/Sequential)
+       a. GetFollowingAnchorsForFeed:
+          - Get user's followed anchors (limit 10)
+          - For each, compare Anchor.Version with Follow.LastSeenVersion
+          - Mark hasUpdate = true if Version > LastSeenVersion
+       b. GetSuggestedCategories:
+          - Get popular tags from database
+    
+    2. GET MAIN FEED CONTENT (Existing algorithm)
+       - GetFollowingFeed(...)
+    
+    3. ASSEMBLE HomeFeedResponse
+       Return HomeFeedResponse{FollowingAnchors, SuggestedCategories, Feed}
+
+Function GetFollowingFeed(currentUserID, limit, cursor, includeOwn):
 
     1. VALIDATE INPUT
        - If cursor provided, decode and validate

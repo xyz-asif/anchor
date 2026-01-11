@@ -13,11 +13,11 @@ import (
 )
 
 // RegisterRoutes registers the anchor-related routes
-func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Config) {
+func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Config, anchorFollowService AnchorFollowService, notificationService *notifications.Service) {
 	// Initialize repositories
 	repo := NewRepository(db)
 	authRepo := auth.NewRepository(db)
-	notificationService := notifications.GetService(db)
+	// notificationService := notifications.GetService(db) // This line is now removed as notificationService is passed in
 
 	// Initialize Cloudinary service
 	cloudinarySvc, err := cloudinary.NewService(cfg.CloudinaryCloudName, cfg.CloudinaryAPIKey, cfg.CloudinaryAPISecret, "anchors")
@@ -26,7 +26,7 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Con
 	}
 
 	// Initialize handler (repos passed as nil to avoid import cycles)
-	handler := NewHandler(repo, authRepo, notificationService, cfg, cloudinarySvc, nil, nil)
+	handler := NewHandler(repo, authRepo, notificationService, cfg, cloudinarySvc, nil, nil, anchorFollowService)
 
 	// Initialize auth middleware
 	authMiddleware := middleware.NewAuthMiddleware(authRepo, cfg)
@@ -38,6 +38,7 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Con
 		// Public routes WITH optional auth (can identify logged-in users)
 		anchors.GET("/:id", optionalAuth, handler.GetAnchor)
 		anchors.GET("/:id/items", optionalAuth, handler.ListAnchorItems)
+		anchors.GET("/:id/clones", optionalAuth, handler.GetAnchorClones) // Added route
 		anchors.GET("", optionalAuth, handler.ListUserAnchors)
 
 		// Protected routes (require authentication)

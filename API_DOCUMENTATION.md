@@ -9,17 +9,27 @@
 ## Table of Contents
 
 1. [Authentication](#1-authentication)
-2. [User Management](#2-user-management)
+   - 2.9 [Delete Account](#29-delete-account)
+   - 2.10 [Get by Username](#210-get-by-username)
+   - 2.11 [Get User's Likes](#211-get-users-likes)
+   - 2.12 [Get User's Clones](#212-get-users-clones)
 3. [Anchors](#3-anchors)
+   ...
+   - 3.8 [Get Anchor Clones](#38-get-anchor-clones)
 4. [Items](#4-items)
-5. [Likes](#5-likes)
-6. [Comments](#6-comments)
+...
 7. [Follows](#7-follows)
+   - 7.1 [Follow/Unfollow User](#71-followunfollow-user)
+   - 7.2 [Get Follow Status](#72-get-follow-status)
+   - 7.3 [List Followers/Following](#73-list-followersfollowing)
+   - 7.4 [Follow/Unfollow Anchor](#74-followunfollow-anchor)
 8. [Feed](#8-feed)
-9. [Search](#9-search)
-10. [Notifications](#10-notifications)
-11. [Interests](#11-interests)
+...
 12. [Safety & Moderation](#12-safety--moderation)
+    - 12.1 [Create Report](#121-create-report)
+    - 12.2 [Block User](#122-block-user)
+    - 12.3 [Get Blocked Users](#123-get-blocked-users)
+    - 12.4 [Unblock User](#124-unblock-user)
 13. [Media](#13-media)
 14. [Common Models](#14-common-models)
 
@@ -190,9 +200,42 @@
 }
 ```
 
-**Errors:**
 - `400` - Username already taken or already changed
 - `401` - Unauthorized
+
+---
+
+### 1.7 Check Username Availability
+
+**Endpoint:** `GET /auth/username/check`
+**Authentication:** None
+**Description:** Check if a username is available. Returns 200 OK for both available and unavailable cases.
+
+**Query Parameters:**
+- `username` - Username to check (required, 3-20 chars)
+
+**Response (Available):** `200 OK`
+```json
+{
+  "success": true,
+  "data": {
+    "username": "example",
+    "available": true
+  }
+}
+```
+
+**Response (Unavailable):** `200 OK`
+```json
+{
+  "success": true,
+  "data": {
+    "username": "admin",
+    "available": false,
+    "reason": "This username is reserved"
+  }
+}
+```
 
 ---
 
@@ -408,11 +451,122 @@
 }
 ```
 
-> **Warning:** This action is irreversible. Deletes:
-> - User account
-> - All anchors and items
-> - All Cloudinary assets (images, audio)
 > - Profile and cover images
+
+---
+
+### 2.10 Get by Username
+
+**Endpoint:** `GET /users/username/{username}`
+**Authentication:** Optional
+**Description:** Get user profile by username. Includes follow status if viewer is authenticated.
+
+**Path Parameters:**
+- `username` - Username (required)
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "data": {
+    "id": "ObjectId",
+    "username": "string",
+    "displayName": "string",
+    "bio": "string",
+    "profilePictureUrl": "string",
+    "coverImageUrl": "string",
+    "followerCount": 0,
+    "followingCount": 0,
+    "anchorCount": 0,
+    "isVerified": false,
+    "joinedAt": "ISO8601",
+    "isFollowing": false,
+    "isFollowedBy": false,
+    "isMutual": false
+  }
+}
+```
+
+---
+
+### 2.11 Get User's Likes
+
+**Endpoint:** `GET /users/{id}/likes`
+**Authentication:** Optional (unless using 'me')
+**Description:** Get paginated list of anchors liked by a user. Use 'me' as id for current user.
+
+**Path Parameters:**
+- `id` - User ID or 'me'
+
+**Query Parameters:**
+- `page` - Page number (default: 1)
+- `limit` - Items per page (default: 20, max: 50)
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "data": {
+    "data": [
+      {
+        "id": "ObjectId",
+        "title": "string",
+        "description": "string",
+        "itemCount": 5,
+        "likeCount": 10,
+        "likedAt": "ISO8601",
+        "author": {
+          "id": "ObjectId",
+          "username": "string",
+          "displayName": "string",
+          "profilePictureUrl": "string"
+        }
+      }
+    ],
+    "pagination": { /* Pagination object */ }
+  }
+}
+```
+
+---
+
+### 2.12 Get User's Clones
+
+**Endpoint:** `GET /users/{id}/clones`
+**Authentication:** Optional (unless using 'me')
+**Description:** Get paginated list of anchors cloned by a user. Use 'me' as id for current user.
+
+**Path Parameters:**
+- `id` - User ID or 'me'
+
+**Query Parameters:**
+- `page` - Page number (default: 1)
+- `limit` - Items per page (default: 20, max: 50)
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "data": {
+    "data": [
+      {
+        "id": "ObjectId",
+        "title": "string",
+        "description": "string",
+        "itemCount": 5,
+        "likeCount": 10,
+        "clonedAt": "ISO8601",
+        "originalAuthor": {
+          "id": "ObjectId",
+          "username": "string",
+          "displayName": "string"
+        }
+      }
+    ],
+    "pagination": { /* Pagination object */ }
+  }
+}
+```
 
 ---
 
@@ -624,6 +778,52 @@
 {
   "success": true,
   "data": { /* Cloned Anchor object */ }
+}
+```
+
+---
+
+---
+
+### 3.8 Get Anchor Clones
+
+**Endpoint:** `GET /anchors/{id}/clones`  
+**Authentication:** Optional  
+**Description:** Get paginated list of clones for an anchor
+
+**Path Parameters:**
+- `id` - Anchor ID (ObjectId)
+
+**Query Parameters:**
+- `page` - Page number (default: 1)
+- `limit` - Items per page (default: 20, max: 50)
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "data": {
+    "data": [
+      {
+        "id": "ObjectId",
+        "title": "string",
+        "createdAt": "ISO8601",
+        "cloner": {
+          "id": "ObjectId",
+          "username": "string",
+          "displayName": "string",
+          "profilePictureUrl": "string"
+        }
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 20,
+      "total": 5,
+      "totalPages": 1,
+      "hasMore": false
+    }
+  }
 }
 ```
 
@@ -1152,27 +1352,140 @@
 
 ---
 
-## 8. Feed
+```
 
-### 8.1 Get Following Feed
+---
 
-**Endpoint:** `GET /feed/following`  
+### 7.4 Anchor Follows
+
+#### 7.4.1 Follow/Unfollow Anchor
+**Endpoint:** `POST /anchors/{id}/follow`  
 **Authentication:** Required  
-**Description:** Get personalized feed from followed users
+**Description:** Follow or unfollow an anchor to track updates
 
-**Query Parameters:**
-- `limit` - Items per page (default: 20, max: 50)
-- `cursor` - Pagination cursor (optional)
-- `includeOwn` - Include own anchors (default: true)
+**Request Body:**
+```json
+{
+  "action": "follow|unfollow (required)",
+  "notifyOnUpdate": "boolean (optional, default: false)"
+}
+```
 
 **Response:** `200 OK`
 ```json
 {
   "success": true,
   "data": {
-    "anchors": [ /* Array of Anchor objects with author info */ ],
-    "nextCursor": "string|null",
-    "hasMore": true
+    "isFollowing": true,
+    "notifyOnUpdate": true,
+    "followerCount": 42
+  }
+}
+```
+
+#### 7.4.2 Get Anchor Follow Status
+**Endpoint:** `GET /anchors/{id}/follow/status`  
+**Authentication:** Required  
+**Description:** Check if current user is following an anchor and get update status
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "data": {
+    "isFollowing": true,
+    "notifyOnUpdate": true,
+    "hasUpdates": true,
+    "updatesSinceLastSeen": 3,
+    "lastSeenVersion": 5,
+    "currentVersion": 8,
+    "followedAt": "ISO8601"
+  }
+}
+```
+
+#### 7.4.3 Toggle Anchor Notifications
+**Endpoint:** `PATCH /anchors/{id}/follow/notifications`  
+**Authentication:** Required  
+**Description:** Enable or disable notifications for anchor updates
+
+**Request Body:**
+```json
+{
+  "notifyOnUpdate": "boolean (required)"
+}
+```
+
+#### 7.4.4 List Following Anchors
+**Endpoint:** `GET /users/me/following-anchors`  
+**Authentication:** Required  
+**Description:** Get all anchors the current user is following
+
+**Query Parameters:**
+- `page`, `limit` - Pagination
+- `sort` - `recent|updated|alphabetical`
+- `hasUpdates` - `true|false` (filter only anchors with updates)
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "data": {
+    "data": [ /* Array of FollowingAnchorItem */ ],
+    "pagination": { ... },
+    "meta": {
+      "totalWithUpdates": 5,
+      "sort": "recent"
+    }
+  }
+}
+```
+
+---
+
+## 8. Feed
+
+### 8.1 Get Home Feed
+
+**Endpoint:** `GET /feed/following`  
+**Authentication:** Required  
+**Description:** Get personalized home feed with following sections and suggestions
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "data": {
+    "followingAnchors": {
+      "items": [
+        {
+          "id": "ObjectId",
+          "title": "string",
+          "coverMediaType": "string",
+          "coverMediaValue": "string",
+          "hasUpdate": true,
+          "lastSeenVersion": 5,
+          "currentVersion": 8
+        }
+      ],
+      "totalCount": 12
+    },
+    "suggestedCategories": [
+      { "name": "Technology", "anchorCount": 150 }
+    ],
+    "feed": {
+      "items": [ /* Standard feed anchors */ ],
+      "pagination": {
+        "limit": 20,
+        "hasMore": true,
+        "nextCursor": "string",
+        "itemCount": 20
+      },
+      "meta": {
+        "feedType": "following",
+        "totalFollowing": 25
+      }
+    }
   }
 }
 ```
@@ -1380,7 +1693,7 @@
     "notifications": [
       {
         "id": "ObjectId",
-        "type": "like|comment|follow|clone|mention",
+        "type": "like|comment|follow|clone|mention|anchor_update",
         "resourceType": "anchor|user|comment",
         "resourceId": "ObjectId",
         "anchorId": "ObjectId|null",
@@ -1594,6 +1907,25 @@
 ```
 
 ---
+
+### 12.4 Unblock User
+
+**Endpoint:** `DELETE /users/{id}/block`
+**Authentication:** Required
+**Description:** Unblock a user.
+
+**Path Parameters:**
+- `id` - User ID to unblock
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "data": {
+    "message": "User unblocked successfully"
+  }
+}
+```
 
 ## 13. Media
 

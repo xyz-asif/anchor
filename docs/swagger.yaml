@@ -1,5 +1,125 @@
 basePath: /api/v1
 definitions:
+  anchor_follows.AuthorInfo:
+    properties:
+      displayName:
+        type: string
+      id:
+        type: string
+      isVerified:
+        type: boolean
+      profilePictureUrl:
+        type: string
+      username:
+        type: string
+    type: object
+  anchor_follows.FollowAnchorRequest:
+    properties:
+      action:
+        enum:
+        - follow
+        - unfollow
+        type: string
+      notifyOnUpdate:
+        type: boolean
+    required:
+    - action
+    type: object
+  anchor_follows.FollowAnchorResponse:
+    properties:
+      followerCount:
+        type: integer
+      isFollowing:
+        type: boolean
+      notifyOnUpdate:
+        type: boolean
+    type: object
+  anchor_follows.FollowStatusResponse:
+    properties:
+      currentVersion:
+        type: integer
+      followedAt:
+        type: string
+      hasUpdates:
+        type: boolean
+      isFollowing:
+        type: boolean
+      lastSeenVersion:
+        type: integer
+      notifyOnUpdate:
+        type: boolean
+      updatesSinceLastSeen:
+        type: integer
+    type: object
+  anchor_follows.FollowingAnchorItem:
+    properties:
+      author:
+        $ref: '#/definitions/anchor_follows.AuthorInfo'
+      currentVersion:
+        type: integer
+      description:
+        type: string
+      followedAt:
+        type: string
+      followerCount:
+        type: integer
+      hasUpdates:
+        type: boolean
+      id:
+        type: string
+      itemCount:
+        type: integer
+      lastItemAddedAt:
+        type: string
+      lastSeenVersion:
+        type: integer
+      likeCount:
+        type: integer
+      notifyOnUpdate:
+        type: boolean
+      tags:
+        items:
+          type: string
+        type: array
+      title:
+        type: string
+      updatesSinceLastSeen:
+        type: integer
+      visibility:
+        type: string
+    type: object
+  anchor_follows.ListFollowingAnchorsResponse:
+    properties:
+      data:
+        items:
+          $ref: '#/definitions/anchor_follows.FollowingAnchorItem'
+        type: array
+      meta:
+        properties:
+          sort:
+            type: string
+          totalWithUpdates:
+            type: integer
+        type: object
+      pagination:
+        properties:
+          hasMore:
+            type: boolean
+          limit:
+            type: integer
+          page:
+            type: integer
+          total:
+            type: integer
+          totalPages:
+            type: integer
+        type: object
+    type: object
+  anchor_follows.ToggleNotificationsRequest:
+    properties:
+      notifyOnUpdate:
+        type: boolean
+    type: object
   anchors.Anchor:
     properties:
       cloneCount:
@@ -23,6 +143,9 @@ definitions:
         type: string
       engagementScore:
         type: integer
+      followerCount:
+        description: How many users follow this anchor
+        type: integer
       id:
         type: string
       isPinned:
@@ -43,11 +166,56 @@ definitions:
         type: string
       userId:
         type: string
+      version:
+        description: Increments when items added
+        type: integer
       viewCount:
         type: integer
       visibility:
         description: '"private", "unlisted", "public"'
         type: string
+    type: object
+  anchors.AnchorCloneItem:
+    properties:
+      cloner:
+        $ref: '#/definitions/anchors.AnchorClonerInfo'
+      createdAt:
+        type: string
+      id:
+        type: string
+      title:
+        type: string
+    type: object
+  anchors.AnchorClonerInfo:
+    properties:
+      displayName:
+        type: string
+      id:
+        type: string
+      profilePictureUrl:
+        type: string
+      username:
+        type: string
+    type: object
+  anchors.AnchorClonesResponse:
+    properties:
+      data:
+        items:
+          $ref: '#/definitions/anchors.AnchorCloneItem'
+        type: array
+      pagination:
+        properties:
+          hasMore:
+            type: boolean
+          limit:
+            type: integer
+          page:
+            type: integer
+          total:
+            type: integer
+          totalPages:
+            type: integer
+        type: object
     type: object
   anchors.AnchorWithItemsResponse:
     properties:
@@ -765,6 +933,50 @@ definitions:
       pagination:
         $ref: '#/definitions/feed.FeedPagination'
     type: object
+  feed.FollowingAnchorFeedItem:
+    properties:
+      coverMediaType:
+        type: string
+      coverMediaValue:
+        type: string
+      currentVersion:
+        type: integer
+      hasUpdate:
+        type: boolean
+      id:
+        type: string
+      lastSeenVersion:
+        type: integer
+      title:
+        type: string
+    type: object
+  feed.FollowingAnchorsSection:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/feed.FollowingAnchorFeedItem'
+        type: array
+      totalCount:
+        type: integer
+    type: object
+  feed.HomeFeedResponse:
+    properties:
+      feed:
+        $ref: '#/definitions/feed.FeedResponse'
+      followingAnchors:
+        $ref: '#/definitions/feed.FollowingAnchorsSection'
+      suggestedCategories:
+        items:
+          $ref: '#/definitions/feed.SuggestedCategory'
+        type: array
+    type: object
+  feed.SuggestedCategory:
+    properties:
+      anchorCount:
+        type: integer
+      name:
+        type: string
+    type: object
   follows.FollowActionRequest:
     properties:
       action:
@@ -1427,6 +1639,42 @@ paths:
       summary: Update an anchor
       tags:
       - anchors
+  /anchors/{id}/clones:
+    get:
+      description: Get paginated list of clones for an anchor
+      parameters:
+      - description: Anchor ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Page number
+        in: query
+        name: page
+        type: integer
+      - description: Limit per page
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/anchors.AnchorClonesResponse'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      summary: Get clones of an anchor
+      tags:
+      - anchors
   /anchors/{id}/comments:
     get:
       description: Get paginated list of comments
@@ -1524,6 +1772,115 @@ paths:
       summary: Add comment to anchor
       tags:
       - comments
+  /anchors/{id}/follow:
+    post:
+      consumes:
+      - application/json
+      description: Follow or unfollow an anchor to track updates
+      parameters:
+      - description: Anchor ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Follow action
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/anchor_follows.FollowAnchorRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/anchor_follows.FollowAnchorResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Follow or unfollow an anchor
+      tags:
+      - anchor-follows
+  /anchors/{id}/follow/notifications:
+    patch:
+      consumes:
+      - application/json
+      description: Enable or disable notifications when anchor is updated
+      parameters:
+      - description: Anchor ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Notification preference
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/anchor_follows.ToggleNotificationsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Toggle update notifications for followed anchor
+      tags:
+      - anchor-follows
+  /anchors/{id}/follow/status:
+    get:
+      description: Check if current user is following an anchor and get update status
+      parameters:
+      - description: Anchor ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/anchor_follows.FollowStatusResponse'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Get follow status for an anchor
+      tags:
+      - anchor-follows
   /anchors/{id}/like:
     post:
       consumes:
@@ -1907,6 +2264,29 @@ paths:
       summary: Update username
       tags:
       - auth
+  /auth/username/check:
+    get:
+      description: Check if a username is available for registration
+      parameters:
+      - description: Username to check (3-20 chars)
+        in: query
+        name: username
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      summary: Check if username is available
+      tags:
+      - auth
   /comments/{id}:
     delete:
       description: Delete own comment or any comment on own anchor
@@ -2186,7 +2566,7 @@ paths:
             - $ref: '#/definitions/response.APIResponse'
             - properties:
                 data:
-                  $ref: '#/definitions/feed.FeedResponse'
+                  $ref: '#/definitions/feed.HomeFeedResponse'
               type: object
         "400":
           description: Bad Request
@@ -2674,6 +3054,25 @@ paths:
       tags:
       - users
   /users/{id}/block:
+    delete:
+      parameters:
+      - description: User ID to unblock
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Unblock a user
+      tags:
+      - safety
     post:
       parameters:
       - description: User ID to block
@@ -2693,6 +3092,37 @@ paths:
       summary: Block a user
       tags:
       - safety
+  /users/{id}/clones:
+    get:
+      description: Get paginated list of anchors cloned by a user
+      parameters:
+      - description: User ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Page number (default 1)
+        in: query
+        name: page
+        type: integer
+      - description: Items per page (default 20, max 50)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      summary: Get user's cloned anchors
+      tags:
+      - users
   /users/{id}/follow:
     post:
       consumes:
@@ -2823,6 +3253,37 @@ paths:
       summary: List followers or following
       tags:
       - follows
+  /users/{id}/likes:
+    get:
+      description: Get paginated list of anchors liked by a user
+      parameters:
+      - description: User ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Page number (default 1)
+        in: query
+        name: page
+        type: integer
+      - description: Items per page (default 20, max 50)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      summary: Get user's liked anchors
+      tags:
+      - users
   /users/{id}/pinned:
     get:
       description: Get pinned anchors for a specific user
@@ -3019,6 +3480,43 @@ paths:
       summary: Upload cover image
       tags:
       - users
+  /users/me/following-anchors:
+    get:
+      description: Get all anchors the current user is following with update status
+      parameters:
+      - description: Page number (default 1)
+        in: query
+        name: page
+        type: integer
+      - description: Items per page (default 20, max 50)
+        in: query
+        name: limit
+        type: integer
+      - description: Filter only anchors with updates
+        in: query
+        name: hasUpdates
+        type: boolean
+      - description: 'Sort: recent, updated, alphabetical'
+        in: query
+        name: sort
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/anchor_follows.ListFollowingAnchorsResponse'
+              type: object
+      security:
+      - BearerAuth: []
+      summary: List anchors user is following
+      tags:
+      - anchor-follows
   /users/me/interests:
     post:
       consumes:
@@ -3095,6 +3593,34 @@ paths:
       security:
       - BearerAuth: []
       summary: Upload profile picture
+      tags:
+      - users
+  /users/username/{username}:
+    get:
+      description: Get public profile of a user by their username
+      parameters:
+      - description: Username
+        in: path
+        name: username
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/auth.PublicProfileResponse'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.APIResponse'
+      summary: Get user profile by username
       tags:
       - users
 schemes:

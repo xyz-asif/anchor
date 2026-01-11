@@ -31,7 +31,7 @@ func NewHandler(service *Service, cfg *config.Config) *Handler {
 // @Param limit query int false "Items per page (default 20, max 50)"
 // @Param cursor query string false "Pagination cursor"
 // @Param includeOwn query bool false "Include own anchors (default true)"
-// @Success 200 {object} response.APIResponse{data=FeedResponse}
+// @Success 200 {object} response.APIResponse{data=HomeFeedResponse}
 // @Failure 400 {object} response.APIResponse
 // @Failure 401 {object} response.APIResponse
 // @Router /feed/following [get]

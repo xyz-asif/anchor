@@ -44,6 +44,7 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Con
 		// Legacy/Compatible routes
 		auth.GET("/me", authMiddleware, handler.GetMe)
 		auth.PATCH("/profile", authMiddleware, handler.UpdateProfile)
+		auth.GET("/username/check", handler.CheckUsernameAvailability)
 		auth.PATCH("/username", authMiddleware, handler.UpdateUsername)
 	}
 

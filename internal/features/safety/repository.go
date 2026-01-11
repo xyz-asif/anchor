@@ -51,3 +51,14 @@ func (r *Repository) BlockUser(ctx context.Context, blockerID, blockedID primiti
 	_, err := r.usersCollection.UpdateOne(ctx, filter, update)
 	return err
 }
+
+func (r *Repository) RemoveBlock(ctx context.Context, blockerID, blockedID primitive.ObjectID) error {
+	filter := bson.M{"_id": blockerID}
+	update := bson.M{
+		"$pull": bson.M{"blockedUsers": blockedID},
+		"$set":  bson.M{"updatedAt": time.Now()},
+	}
+
+	_, err := r.usersCollection.UpdateOne(ctx, filter, update)
+	return err
+}

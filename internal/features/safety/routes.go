@@ -22,6 +22,7 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Con
 	users.Use(authMiddleware)
 	{
 		users.POST("/:id/block", handler.BlockUser)
+		users.DELETE("/:id/block", handler.UnblockUser)
 		users.GET("/me/blocks", handler.GetBlockedUsers)
 	}
 }

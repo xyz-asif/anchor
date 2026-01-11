@@ -175,3 +175,33 @@ type DiscoverResponse struct {
 	Pagination FeedPagination `json:"pagination"`
 	Meta       DiscoverMeta   `json:"meta"`
 }
+
+// FollowingAnchorFeedItem represents an anchor in the following section with update status
+type FollowingAnchorFeedItem struct {
+	ID              primitive.ObjectID `json:"id"`
+	Title           string             `json:"title"`
+	CoverMediaType  string             `json:"coverMediaType"`
+	CoverMediaValue string             `json:"coverMediaValue"`
+	HasUpdate       bool               `json:"hasUpdate"`
+	LastSeenVersion int                `json:"lastSeenVersion"`
+	CurrentVersion  int                `json:"currentVersion"`
+}
+
+// FollowingAnchorsSection represents the section of followed anchors with updates
+type FollowingAnchorsSection struct {
+	Items      []FollowingAnchorFeedItem `json:"items"`
+	TotalCount int                       `json:"totalCount"`
+}
+
+// SuggestedCategory represents a tag/category recommendation
+type SuggestedCategory struct {
+	Name        string `json:"name"`
+	AnchorCount int    `json:"anchorCount"`
+}
+
+// HomeFeedResponse is the updated response for the main feed
+type HomeFeedResponse struct {
+	FollowingAnchors    FollowingAnchorsSection `json:"followingAnchors"`
+	SuggestedCategories []SuggestedCategory     `json:"suggestedCategories"`
+	Feed                FeedResponse            `json:"feed"`
+}

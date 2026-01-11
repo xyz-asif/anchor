@@ -15,6 +15,7 @@ import (
 type Repository struct {
 	anchorsCollection *mongo.Collection
 	itemsCollection   *mongo.Collection
+	db                *mongo.Database
 }
 
 // NewRepository initializes the repository and creates necessary indexes
@@ -89,6 +90,7 @@ func NewRepository(db *mongo.Database) *Repository {
 	return &Repository{
 		anchorsCollection: anchorsCollection,
 		itemsCollection:   itemsCollection,
+		db:                db,
 	}
 }
 
@@ -571,4 +573,165 @@ func (r *Repository) DeleteAnchor(ctx context.Context, anchorID primitive.Object
 	// Delete anchor
 	_, err = r.anchorsCollection.DeleteOne(ctx, bson.M{"_id": anchorID})
 	return err
+}
+
+// GetUserClonedAnchors returns anchors cloned by a user
+func (r *Repository) GetUserClonedAnchors(ctx context.Context, userID primitive.ObjectID, page, limit int) ([]Anchor, int64, error) {
+	filter := bson.M{
+		"userId":    userID,
+		"isClone":   true,
+		"deletedAt": nil,
+	}
+
+	total, err := r.anchorsCollection.CountDocuments(ctx, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	opts := options.Find().
+		SetSort(bson.D{{Key: "createdAt", Value: -1}}).
+		SetSkip(int64((page - 1) * limit)).
+		SetLimit(int64(limit))
+
+	cursor, err := r.anchorsCollection.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer cursor.Close(ctx)
+
+	var anchors []Anchor
+	if err = cursor.All(ctx, &anchors); err != nil {
+		return nil, 0, err
+	}
+
+	return anchors, total, nil
+}
+
+// GetAnchorClones returns clones of an anchor
+func (r *Repository) GetAnchorClones(ctx context.Context, originalAnchorID primitive.ObjectID, page, limit int) ([]Anchor, int64, error) {
+	filter := bson.M{
+		"originalAnchorId": originalAnchorID,
+		"isClone":          true,
+		"deletedAt":        nil,
+	}
+
+	total, err := r.anchorsCollection.CountDocuments(ctx, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	opts := options.Find().
+		SetSort(bson.D{{Key: "createdAt", Value: -1}}).
+		SetSkip(int64((page - 1) * limit)).
+		SetLimit(int64(limit))
+
+	cursor, err := r.anchorsCollection.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer cursor.Close(ctx)
+
+	var anchors []Anchor
+	if err = cursor.All(ctx, &anchors); err != nil {
+		return nil, 0, err
+	}
+
+	return anchors, total, nil
+}
+
+// GetAnchorsByIDs retrieves multiple anchors by their IDs
+func (r *Repository) GetAnchorsByIDs(ctx context.Context, anchorIDs []primitive.ObjectID) ([]Anchor, error) {
+	if len(anchorIDs) == 0 {
+		return []Anchor{}, nil
+	}
+
+	filter := bson.M{
+		"_id":       bson.M{"$in": anchorIDs},
+		"deletedAt": nil,
+	}
+
+	cursor, err := r.anchorsCollection.Find(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var anchors []Anchor
+	if err = cursor.All(ctx, &anchors); err != nil {
+		return nil, err
+	}
+
+	return anchors, nil
+}
+
+// IncrementFollowerCount increments or decrements the anchor's follower count
+func (r *Repository) IncrementFollowerCount(ctx context.Context, anchorID primitive.ObjectID, delta int) error {
+	filter := bson.M{"_id": anchorID}
+	update := bson.M{
+		"$inc": bson.M{"followerCount": delta},
+		"$set": bson.M{"updatedAt": time.Now()},
+	}
+
+	_, err := r.anchorsCollection.UpdateOne(ctx, filter, update)
+	return err
+}
+
+// IncrementVersion increments the anchor version (called when items added)
+func (r *Repository) IncrementVersion(ctx context.Context, anchorID primitive.ObjectID) error {
+	now := time.Now()
+	filter := bson.M{"_id": anchorID}
+	update := bson.M{
+		"$inc": bson.M{"version": 1},
+		"$set": bson.M{
+			"lastItemAddedAt": now,
+			"updatedAt":       now,
+		},
+	}
+
+	_, err := r.anchorsCollection.UpdateOne(ctx, filter, update)
+	return err
+}
+
+type TagCount struct {
+	Name  string `bson:"name"`
+	Count int    `bson:"count"`
+}
+
+// GetPopularTags returns most used tags from public anchors
+func (r *Repository) GetPopularTags(ctx context.Context, limit int) ([]TagCount, error) {
+	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{
+			"visibility": "public",
+			"deletedAt":  nil,
+		}}},
+		{{Key: "$unwind", Value: "$tags"}},
+		{{Key: "$group", Value: bson.M{
+			"_id":   bson.M{"$toLower": "$tags"},
+			"count": bson.M{"$sum": 1},
+		}}},
+		{{Key: "$sort", Value: bson.M{"count": -1}}},
+		{{Key: "$limit", Value: limit}},
+		{{Key: "$project", Value: bson.M{
+			"_id":   0,
+			"name":  "$_id",
+			"count": 1,
+		}}},
+	}
+
+	cursor, err := r.anchorsCollection.Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var results []TagCount
+	if err = cursor.All(ctx, &results); err != nil {
+		return nil, err
+	}
+
+	if results == nil {
+		results = []TagCount{}
+	}
+
+	return results, nil
 }

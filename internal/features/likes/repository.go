@@ -186,3 +186,31 @@ func (r *Repository) GetUserLikedAnchors(ctx context.Context, userID primitive.O
 
 	return result, nil
 }
+
+// GetUserLikedAnchorsPaginated returns anchors liked by a user with pagination
+func (r *Repository) GetUserLikedAnchorsPaginated(ctx context.Context, userID primitive.ObjectID, page, limit int) ([]Like, int64, error) {
+	filter := bson.M{"userId": userID}
+
+	total, err := r.collection.CountDocuments(ctx, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	opts := options.Find().
+		SetSort(bson.D{{Key: "createdAt", Value: -1}}).
+		SetSkip(int64((page - 1) * limit)).
+		SetLimit(int64(limit))
+
+	cursor, err := r.collection.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer cursor.Close(ctx)
+
+	var likes []Like
+	if err = cursor.All(ctx, &likes); err != nil {
+		return nil, 0, err
+	}
+
+	return likes, total, nil
+}

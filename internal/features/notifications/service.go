@@ -2,21 +2,36 @@ package notifications
 
 import (
 	"context"
+	"time"
 
 	"github.com/xyz-asif/gotodo/internal/features/auth"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
-type Service struct {
-	repo     *Repository
-	authRepo *auth.Repository
+// FollowerProvider defines an interface to fetch anchor followers
+// This helps break the circular dependency with anchor_follows package
+type FollowerProvider interface {
+	GetFollowersWithNotifications(ctx context.Context, anchorID primitive.ObjectID) ([]primitive.ObjectID, error)
 }
 
-func NewService(repo *Repository, authRepo *auth.Repository) *Service {
+type Service struct {
+	repo             *Repository
+	authRepo         *auth.Repository
+	db               *mongo.Database
+	followerProvider FollowerProvider
+}
+
+func NewService(repo *Repository, authRepo *auth.Repository, db *mongo.Database) *Service {
 	return &Service{
 		repo:     repo,
 		authRepo: authRepo,
+		db:       db,
 	}
+}
+
+func (s *Service) SetFollowerProvider(provider FollowerProvider) {
+	s.followerProvider = provider
 }
 
 // CommentData holds data needed for notification creation
@@ -226,8 +241,7 @@ func (s *Service) CreateCloneNotification(ctx context.Context, clonedAnchorID, o
 func (s *Service) isBlocked(ctx context.Context, recipientID, actorID primitive.ObjectID) bool {
 	user, err := s.authRepo.GetUserByObjectID(ctx, recipientID)
 	if err != nil || user == nil {
-		return false // Default to not blocked if error (or handle differently?)
-		// If user doesn't exist, we can't block.
+		return false // Default to not blocked if error
 	}
 	for _, id := range user.BlockedUsers {
 		if id == actorID {
@@ -235,4 +249,60 @@ func (s *Service) isBlocked(ctx context.Context, recipientID, actorID primitive.
 		}
 	}
 	return false
+}
+
+// CreateAnchorUpdateNotifications notifies followers about anchor updates
+func (s *Service) CreateAnchorUpdateNotifications(ctx context.Context, anchorID primitive.ObjectID, anchorTitle string, authorID primitive.ObjectID) error {
+	if s.followerProvider == nil {
+		return nil
+	}
+
+	// Get all follower IDs with notifyOnUpdate=true
+	followerIDs, err := s.followerProvider.GetFollowersWithNotifications(ctx, anchorID)
+	if err != nil {
+		return err
+	}
+
+	if len(followerIDs) == 0 {
+		return nil
+	}
+
+	// Create notifications in batch
+	now := time.Now()
+	notificationsList := make([]Notification, 0)
+
+	for _, followerID := range followerIDs {
+		// Don't notify the author
+		if followerID == authorID {
+			continue
+		}
+
+		notification := Notification{
+			ID:           primitive.NewObjectID(),
+			RecipientID:  followerID,
+			ActorID:      authorID,
+			Type:         TypeAnchorUpdate,
+			ResourceType: "anchor",
+			ResourceID:   anchorID,
+			AnchorID:     &anchorID,
+			Preview:      truncateString(anchorTitle, 100),
+			IsRead:       false,
+			CreatedAt:    now,
+		}
+		notificationsList = append(notificationsList, notification)
+	}
+
+	if len(notificationsList) == 0 {
+		return nil
+	}
+
+	return s.repo.CreateNotifications(ctx, notificationsList)
+}
+
+// Helper function
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
 }

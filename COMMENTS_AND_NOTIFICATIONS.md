@@ -402,6 +402,7 @@ type Notification struct {
 |------|---------|----------------|
 | `mention` | @username in comment | "@alice mentioned you: 'Great work...'" |
 | `comment` | Comment on your anchor | "@alice commented on your anchor 'Design Resources'" |
+| `anchor_update` | Item added to followed anchor | "'Photography' has a new update: 'My new lens'" |
 
 ### Notification Indexes
 
@@ -468,6 +469,40 @@ func CreateCommentNotifications(ctx context.Context, comment *Comment, anchor *A
         notificationRepo.CreateMany(ctx, notifications)
     }
 }
+
+### When Item is Added to Anchor (Anchor Update):
+
+```go
+func CreateAnchorUpdateNotifications(ctx context.Context, anchorID primitive.ObjectID, itemTitle string, actorID primitive.ObjectID) {
+    // 1. Get all followers who have notifications enabled
+    followers = followsRepo.GetNotificationEnabledFollowers(ctx, anchorID)
+    
+    var notifications []Notification
+    for _, f := range followers {
+        // Skip actor
+        if f.UserID == actorID {
+            continue
+        }
+        
+        notifications = append(notifications, Notification{
+            RecipientID:  f.UserID,
+            ActorID:      actorID,
+            Type:         NotificationTypeAnchorUpdate,
+            ResourceType: "anchor",
+            ResourceID:   anchorID,
+            AnchorID:     &anchorID,
+            Preview:      fmt.Sprintf("'%s' has a new update: '%s'", anchor.Title, itemTitle),
+            IsRead:       false,
+            CreatedAt:    time.Now(),
+        })
+    }
+    
+    // Batch insert
+    if len(notifications) > 0 {
+        notificationRepo.CreateMany(ctx, notifications)
+    }
+}
+```
 ```
 
 ### Preview Truncation:
@@ -738,8 +773,9 @@ type PaginatedCommentsResponse struct {
 ```go
 // Notification type constants
 const (
-    NotificationTypeMention = "mention"
-    NotificationTypeComment = "comment"
+    NotificationTypeMention      = "mention"
+    NotificationTypeComment      = "comment"
+    NotificationTypeAnchorUpdate = "anchor_update"
 )
 
 // NotificationListQuery for GET /notifications

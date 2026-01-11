@@ -1,7 +1,9 @@
 package anchors
 
 import (
+	"context"
 	"log"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +17,11 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
+// AnchorFollowService defines the interface for interacting with anchor follows
+type AnchorFollowService interface {
+	UpdateLastSeenVersion(ctx context.Context, userID, anchorID primitive.ObjectID, version int) error
+}
+
 // Handler handles HTTP requests for anchor feature
 type Handler struct {
 	repo                *Repository
@@ -22,12 +29,13 @@ type Handler struct {
 	notificationService *notifications.Service
 	config              *config.Config
 	cloudinary          *cloudinary.Service
-	likesRepo           interface{} // Using interface to avoid cycle
-	followsRepo         interface{} // Using interface to avoid cycle
+	likesRepo           interface{}         // Using interface to avoid cycle
+	followsRepo         interface{}         // Using interface to avoid cycle
+	anchorFollowService AnchorFollowService // Interface to avoid cycle
 }
 
 // NewHandler creates a new anchor handler
-func NewHandler(repo *Repository, authRepo *auth.Repository, notificationService *notifications.Service, cfg *config.Config, cld *cloudinary.Service, likesRepo interface{}, followsRepo interface{}) *Handler {
+func NewHandler(repo *Repository, authRepo *auth.Repository, notificationService *notifications.Service, cfg *config.Config, cld *cloudinary.Service, likesRepo interface{}, followsRepo interface{}, anchorFollowService AnchorFollowService) *Handler {
 	return &Handler{
 		repo:                repo,
 		authRepo:            authRepo,
@@ -36,6 +44,7 @@ func NewHandler(repo *Repository, authRepo *auth.Repository, notificationService
 		cloudinary:          cld,
 		likesRepo:           likesRepo,
 		followsRepo:         followsRepo,
+		anchorFollowService: anchorFollowService,
 	}
 }
 
@@ -348,6 +357,17 @@ func (h *Handler) GetAnchor(c *gin.Context) {
 		Items:  items,
 	}
 
+	// Update last seen version for authenticated user (async)
+	if val, exists := c.Get("user"); exists {
+		if user, ok := val.(*auth.User); ok {
+			go func(uid, aid primitive.ObjectID, ver int) {
+				if h.anchorFollowService != nil {
+					_ = h.anchorFollowService.UpdateLastSeenVersion(context.Background(), uid, aid, ver)
+				}
+			}(user.ID, anchorID, anchor.Version)
+		}
+	}
+
 	response.Success(c, anchorResponse)
 }
 
@@ -543,6 +563,23 @@ func (h *Handler) AddItem(c *gin.Context) {
 		"$set": map[string]interface{}{"lastItemAddedAt": item.CreatedAt},
 		"$inc": map[string]interface{}{"itemCount": 1},
 	})
+
+	// Increment anchor version
+	_ = h.repo.IncrementVersion(c.Request.Context(), anchorID)
+
+	// Send notifications to followers (async)
+	go func(aid primitive.ObjectID, title string, actorID primitive.ObjectID) {
+		notificationService := notifications.GetService(h.repo.db) // Need to check if repo has db
+		err := notificationService.CreateAnchorUpdateNotifications(
+			context.Background(),
+			aid,
+			title,
+			actorID,
+		)
+		if err != nil {
+			log.Printf("Failed to create anchor update notifications: %v", err)
+		}
+	}(anchorID, anchor.Title, user.ID)
 
 	response.Created(c, item)
 }
@@ -768,6 +805,104 @@ func (h *Handler) CloneAnchor(c *gin.Context) {
 	// Implementation placeholder or reused from Clone System
 	// See previous task. Included here for completeness of Handler struct.
 	response.Success(c, "Clone feature implemented in separate module/task")
+}
+
+// GetAnchorClones godoc
+// @Summary Get clones of an anchor
+// @Description Get paginated list of clones for an anchor
+// @Tags anchors
+// @Produce json
+// @Param id path string true "Anchor ID"
+// @Param page query int false "Page number"
+// @Param limit query int false "Limit per page"
+// @Success 200 {object} response.APIResponse{data=AnchorClonesResponse}
+// @Failure 404 {object} response.APIResponse
+// @Router /anchors/{id}/clones [get]
+func (h *Handler) GetAnchorClones(c *gin.Context) {
+	anchorIDStr := c.Param("id")
+	anchorID, err := primitive.ObjectIDFromHex(anchorIDStr)
+	if err != nil {
+		response.BadRequest(c, "Invalid anchor ID", "INVALID_ID")
+		return
+	}
+
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+
+	// Check anchor exists
+	anchor, err := h.repo.GetAnchorByID(c.Request.Context(), anchorID)
+	if err != nil {
+		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
+		return
+	}
+
+	// Verify visibility - if it's private, only owner can see clones?
+	// The prompt implies clones are public if the anchor is public?
+	// Let's enforce basic visibility check
+	if anchor.Visibility == VisibilityPrivate {
+		val, exists := c.Get("user")
+		if !exists {
+			response.Unauthorized(c, "Private anchor", "UNAUTHORIZED")
+			return
+		}
+		user := val.(*auth.User)
+		if user.ID != anchor.UserID {
+			response.Forbidden(c, "No permission")
+			return
+		}
+	}
+
+	clones, total, err := h.repo.GetAnchorClones(c.Request.Context(), anchorID, page, limit)
+	if err != nil {
+		response.InternalServerError(c, "Failed to fetch clones", "DATABASE_ERROR")
+		return
+	}
+
+	// For clones, we might want to show who cloned it (UserID)
+	// Collect user IDs
+	userIDs := make([]primitive.ObjectID, len(clones))
+	for i, clone := range clones {
+		userIDs[i] = clone.UserID
+	}
+
+	usersList, _ := h.authRepo.GetUsersByIDs(c.Request.Context(), userIDs)
+	usersMap := make(map[primitive.ObjectID]*auth.User)
+	for i := range usersList {
+		usersMap[usersList[i].ID] = &usersList[i]
+	}
+
+	items := make([]gin.H, 0)
+	for _, clone := range clones {
+		var clonerInfo gin.H
+		if user, ok := usersMap[clone.UserID]; ok {
+			clonerInfo = gin.H{
+				"id":                user.ID,
+				"username":          user.Username,
+				"displayName":       user.DisplayName,
+				"profilePictureUrl": user.ProfilePictureURL,
+			}
+		}
+
+		items = append(items, gin.H{
+			"id":        clone.ID,
+			"title":     clone.Title,
+			"createdAt": clone.CreatedAt,
+			"cloner":    clonerInfo,
+		})
+	}
+
+	totalPages := int(math.Ceil(float64(total) / float64(limit)))
+
+	response.Success(c, gin.H{
+		"data": items,
+		"pagination": gin.H{
+			"page":       page,
+			"limit":      limit,
+			"total":      total,
+			"totalPages": totalPages,
+			"hasMore":    page < totalPages,
+		},
+	})
 }
 
 // TogglePin toggles the pinned status of an anchor

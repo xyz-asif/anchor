@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"regexp"
+
 	"firebase.google.com/go/v4/auth"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
@@ -41,7 +43,6 @@ type PinnedAnchorData struct {
 	CreatedAt       time.Time
 }
 
-// Handler handles HTTP requests for auth feature
 type Handler struct {
 	repo           *Repository
 	firebaseClient *auth.Client
@@ -51,7 +52,6 @@ type Handler struct {
 	anchorService  AnchorService
 }
 
-// NewHandler creates a new auth handler
 func NewHandler(repo *Repository, firebaseClient *auth.Client, cfg *config.Config, cld *cloudinary.Service, followService FollowService, anchorService AnchorService) *Handler {
 	return &Handler{
 		repo:           repo,
@@ -61,6 +61,76 @@ func NewHandler(repo *Repository, firebaseClient *auth.Client, cfg *config.Confi
 		followService:  followService,
 		anchorService:  anchorService,
 	}
+}
+
+// CheckUsernameAvailability godoc
+// @Summary Check if username is available
+// @Description Check if a username is available for registration
+// @Tags auth
+// @Produce json
+// @Param username query string true "Username to check (3-20 chars)"
+// @Success 200 {object} response.APIResponse
+// @Failure 400 {object} response.APIResponse
+// @Router /auth/username/check [get]
+func (h *Handler) CheckUsernameAvailability(c *gin.Context) {
+	username := c.Query("username")
+	if username == "" {
+		response.BadRequest(c, "MISSING_USERNAME", "Username query parameter is required")
+		return
+	}
+
+	// Normalize
+	username = strings.ToLower(strings.TrimSpace(username))
+
+	// Validate format
+	if len(username) < 3 || len(username) > 20 {
+		response.Success(c, gin.H{
+			"username":  username,
+			"available": false,
+			"reason":    "Username must be 3-20 characters",
+		})
+		return
+	}
+
+	// Check alphanumeric + underscore only
+	validUsername := regexp.MustCompile(`^[a-z0-9_]+$`)
+	if !validUsername.MatchString(username) {
+		response.Success(c, gin.H{
+			"username":  username,
+			"available": false,
+			"reason":    "Username can only contain letters, numbers, and underscores",
+		})
+		return
+	}
+
+	// Check reserved usernames
+	reserved := []string{"admin", "api", "www", "app", "help", "support", "anchor", "anchors", "user", "users", "settings", "login", "logout", "signup", "register", "me", "feed", "search", "notifications"}
+	for _, r := range reserved {
+		if username == r {
+			response.Success(c, gin.H{
+				"username":  username,
+				"available": false,
+				"reason":    "This username is reserved",
+			})
+			return
+		}
+	}
+
+	ctx := c.Request.Context()
+
+	// Check if exists
+	existingUser, _ := h.repo.GetUserByUsername(ctx, username)
+	available := existingUser == nil
+
+	resp := gin.H{
+		"username":  username,
+		"available": available,
+	}
+	if !available {
+		resp["reason"] = "Username is already taken"
+	}
+
+	response.Success(c, resp)
 }
 
 func (h *Handler) getJWTConfig() *idToken.Config {

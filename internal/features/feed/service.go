@@ -3,6 +3,7 @@ package feed
 import (
 	"context"
 
+	"github.com/xyz-asif/gotodo/internal/features/anchor_follows"
 	"github.com/xyz-asif/gotodo/internal/features/anchors"
 	"github.com/xyz-asif/gotodo/internal/features/auth"
 	"github.com/xyz-asif/gotodo/internal/features/follows"
@@ -11,11 +12,12 @@ import (
 )
 
 type Service struct {
-	feedRepo    *Repository
-	authRepo    *auth.Repository
-	followsRepo *follows.Repository
-	likesRepo   *likes.Repository
-	anchorsRepo *anchors.Repository
+	feedRepo          *Repository
+	authRepo          *auth.Repository
+	followsRepo       *follows.Repository
+	likesRepo         *likes.Repository
+	anchorsRepo       *anchors.Repository
+	anchorFollowsRepo *anchor_follows.Repository
 }
 
 func NewService(
@@ -24,13 +26,15 @@ func NewService(
 	followsRepo *follows.Repository,
 	likesRepo *likes.Repository,
 	anchorsRepo *anchors.Repository,
+	anchorFollowsRepo *anchor_follows.Repository,
 ) *Service {
 	return &Service{
-		feedRepo:    feedRepo,
-		authRepo:    authRepo,
-		followsRepo: followsRepo,
-		likesRepo:   likesRepo,
-		anchorsRepo: anchorsRepo,
+		feedRepo:          feedRepo,
+		authRepo:          authRepo,
+		followsRepo:       followsRepo,
+		likesRepo:         likesRepo,
+		anchorsRepo:       anchorsRepo,
+		anchorFollowsRepo: anchorFollowsRepo,
 	}
 }
 
@@ -38,7 +42,7 @@ func (s *Service) GetHomeFeed(
 	ctx context.Context,
 	userID primitive.ObjectID,
 	query *FeedQuery,
-) (*FeedResponse, error) {
+) (*HomeFeedResponse, error) {
 	// 1. Decode Cursor
 	cursor, err := DecodeCursor(query.Cursor)
 	if err != nil {
@@ -62,28 +66,38 @@ func (s *Service) GetHomeFeed(
 		feedUserIDs = append(feedUserIDs, userID)
 	}
 
+	// Initialize enrichment sections for first page only
+	var followingAnchors FollowingAnchorsSection
+	var suggestedCategories []SuggestedCategory
+
+	if cursor == nil {
+		followingAnchors, _ = s.getFollowingAnchorsForFeed(ctx, userID)
+		suggestedCategories, _ = s.getSuggestedCategories(ctx)
+	}
+
 	// 4. Check for empty connection
 	if len(feedUserIDs) == 0 {
 		reason := "NO_FOLLOWING"
-		return &FeedResponse{
-			Items: []FeedItem{},
-			Pagination: FeedPagination{
-				Limit: query.Limit,
-			},
-			Meta: FeedMeta{
-				FeedType:           "following",
-				IncludesOwnAnchors: includeOwn,
-				TotalFollowing:     0,
-				EmptyReason:        &reason,
+		return &HomeFeedResponse{
+			FollowingAnchors:    followingAnchors,
+			SuggestedCategories: suggestedCategories,
+			Feed: FeedResponse{
+				Items: []FeedItem{},
+				Pagination: FeedPagination{
+					Limit: query.Limit,
+				},
+				Meta: FeedMeta{
+					FeedType:           "following",
+					IncludesOwnAnchors: includeOwn,
+					TotalFollowing:     0,
+					EmptyReason:        &reason,
+				},
 			},
 		}, nil
 	}
 
 	// 5. Query Anchors
-	// Get blocked users
 	var blockedUserIDs []primitive.ObjectID
-	// Need to fetch user to get blocked list.
-	// Optimization: pass user object to Service? Or fetch here.
 	currentUser, err := s.authRepo.GetUserByObjectID(ctx, userID)
 	if err == nil && currentUser != nil {
 		blockedUserIDs = currentUser.BlockedUsers
@@ -111,27 +125,24 @@ func (s *Service) GetHomeFeed(
 				reason = "NO_CONTENT"
 			}
 		}
-		emptyReasonPtr := &reason
-		if reason == "END_OF_FEED" && cursor != nil {
-			// Actually if cursor is not null, end of feed is correct.
-			// If cursor is null, it means first page is empty.
-		} else if reason != "END_OF_FEED" {
-			// It was first page empty
-		}
 
-		return &FeedResponse{
-			Items: []FeedItem{},
-			Pagination: FeedPagination{
-				Limit:      query.Limit,
-				HasMore:    false,
-				NextCursor: nil,
-				ItemCount:  0,
-			},
-			Meta: FeedMeta{
-				FeedType:           "following",
-				IncludesOwnAnchors: includeOwn,
-				TotalFollowing:     len(followingIDs),
-				EmptyReason:        emptyReasonPtr,
+		return &HomeFeedResponse{
+			FollowingAnchors:    followingAnchors,
+			SuggestedCategories: suggestedCategories,
+			Feed: FeedResponse{
+				Items: []FeedItem{},
+				Pagination: FeedPagination{
+					Limit:      query.Limit,
+					HasMore:    false,
+					NextCursor: nil,
+					ItemCount:  0,
+				},
+				Meta: FeedMeta{
+					FeedType:           "following",
+					IncludesOwnAnchors: includeOwn,
+					TotalFollowing:     len(followingIDs),
+					EmptyReason:        &reason,
+				},
 			},
 		}, nil
 	}
@@ -167,7 +178,6 @@ func (s *Service) GetHomeFeed(
 	for i, anchor := range anchorsList {
 		author, ok := authorsMap[anchor.UserID]
 		if !ok {
-			// Fallback or skip? Ideally shouldn't happen
 			author = &FeedItemAuthor{ID: anchor.UserID, Username: "Deleted User"}
 		}
 
@@ -206,22 +216,96 @@ func (s *Service) GetHomeFeed(
 		nextCursor = &c
 	}
 
-	return &FeedResponse{
-		Items: feedItems,
-		Pagination: FeedPagination{
-			Limit:      query.Limit,
-			HasMore:    hasMore,
-			NextCursor: nextCursor,
-			ItemCount:  len(feedItems),
-		},
-		Meta: FeedMeta{
-			FeedType:           "following",
-			IncludesOwnAnchors: includeOwn,
-			TotalFollowing:     len(followingIDs),
-			EmptyReason:        nil,
+	return &HomeFeedResponse{
+		FollowingAnchors:    followingAnchors,
+		SuggestedCategories: suggestedCategories,
+		Feed: FeedResponse{
+			Items: feedItems,
+			Pagination: FeedPagination{
+				Limit:      query.Limit,
+				HasMore:    hasMore,
+				NextCursor: nextCursor,
+				ItemCount:  len(feedItems),
+			},
+			Meta: FeedMeta{
+				FeedType:           "following",
+				IncludesOwnAnchors: includeOwn,
+				TotalFollowing:     len(followingIDs),
+				EmptyReason:        nil,
+			},
 		},
 	}, nil
+}
 
+func (s *Service) getFollowingAnchorsForFeed(ctx context.Context, userID primitive.ObjectID) (FollowingAnchorsSection, error) {
+	// 1. Get user follows (limit 10 for feed section)
+	follows, total, err := s.anchorFollowsRepo.GetUserFollowingAnchors(ctx, userID, 1, 10)
+	if err != nil {
+		return FollowingAnchorsSection{Items: []FollowingAnchorFeedItem{}}, err
+	}
+
+	if len(follows) == 0 {
+		return FollowingAnchorsSection{Items: []FollowingAnchorFeedItem{}}, nil
+	}
+
+	// 2. Get anchor details for these follows
+	anchorIDs := make([]primitive.ObjectID, len(follows))
+	for i, f := range follows {
+		anchorIDs[i] = f.AnchorID
+	}
+
+	anchorsList, err := s.anchorsRepo.GetAnchorsByIDs(ctx, anchorIDs)
+	if err != nil {
+		return FollowingAnchorsSection{Items: []FollowingAnchorFeedItem{}}, err
+	}
+
+	// 3. Build map for quick lookup
+	anchorMap := make(map[primitive.ObjectID]anchors.Anchor)
+	for _, a := range anchorsList {
+		anchorMap[a.ID] = a
+	}
+
+	// 4. Build return items
+	items := make([]FollowingAnchorFeedItem, 0)
+	for _, f := range follows {
+		a, ok := anchorMap[f.AnchorID]
+		if !ok {
+			continue
+		}
+
+		items = append(items, FollowingAnchorFeedItem{
+			ID:              a.ID,
+			Title:           a.Title,
+			CoverMediaType:  a.CoverMediaType,
+			CoverMediaValue: a.CoverMediaValue,
+			HasUpdate:       a.Version > f.LastSeenVersion,
+			LastSeenVersion: f.LastSeenVersion,
+			CurrentVersion:  a.Version,
+		})
+	}
+
+	return FollowingAnchorsSection{
+		Items:      items,
+		TotalCount: int(total),
+	}, nil
+}
+
+func (s *Service) getSuggestedCategories(ctx context.Context) ([]SuggestedCategory, error) {
+	// For now, return popular tags from public anchors
+	tags, err := s.anchorsRepo.GetPopularTags(ctx, 10)
+	if err != nil {
+		return []SuggestedCategory{}, err
+	}
+
+	results := make([]SuggestedCategory, len(tags))
+	for i, t := range tags {
+		results[i] = SuggestedCategory{
+			Name:        t.Name,
+			AnchorCount: t.Count,
+		}
+	}
+
+	return results, nil
 }
 
 func (s *Service) enrichWithAuthors(ctx context.Context, userIDs []primitive.ObjectID) (map[primitive.ObjectID]*FeedItemAuthor, error) {

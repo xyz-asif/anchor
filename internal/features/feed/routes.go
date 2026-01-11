@@ -3,6 +3,7 @@ package feed
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/xyz-asif/gotodo/internal/config"
+	"github.com/xyz-asif/gotodo/internal/features/anchor_follows"
 	"github.com/xyz-asif/gotodo/internal/features/anchors"
 	"github.com/xyz-asif/gotodo/internal/features/auth"
 	"github.com/xyz-asif/gotodo/internal/features/follows"
@@ -18,9 +19,10 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Con
 	followsRepo := follows.NewRepository(db)
 	likesRepo := likes.NewRepository(db)
 	anchorsRepo := anchors.NewRepository(db)
+	anchorFollowsRepo := anchor_follows.NewRepository(db)
 
 	// Initialize service
-	service := NewService(feedRepo, authRepo, followsRepo, likesRepo, anchorsRepo)
+	service := NewService(feedRepo, authRepo, followsRepo, likesRepo, anchorsRepo, anchorFollowsRepo)
 
 	// Initialize handler
 	handler := NewHandler(service, cfg)

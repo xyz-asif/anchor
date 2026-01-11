@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/xyz-asif/gotodo/internal/config"
+	"github.com/xyz-asif/gotodo/internal/features/anchor_follows"
 	"github.com/xyz-asif/gotodo/internal/features/anchors"
 	"github.com/xyz-asif/gotodo/internal/features/auth"
 	"github.com/xyz-asif/gotodo/internal/features/comments"
@@ -16,6 +17,7 @@ import (
 	"github.com/xyz-asif/gotodo/internal/features/notifications"
 	"github.com/xyz-asif/gotodo/internal/features/safety"
 	"github.com/xyz-asif/gotodo/internal/features/search"
+	"github.com/xyz-asif/gotodo/internal/features/users"
 	"github.com/xyz-asif/gotodo/internal/pkg/cloudinary"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -78,7 +80,7 @@ func (s *authAnchorServiceAdapter) GetPinnedAnchors(ctx context.Context, userID 
 		return nil, err
 	}
 
-	// Map generic anchor to auth DTO
+	// generic anchor to auth DTO
 	var result []auth.PinnedAnchorData
 	for _, a := range anchorsList {
 		result = append(result, auth.PinnedAnchorData{
@@ -104,6 +106,7 @@ func SetupRoutes(router *gin.Engine, db *mongo.Database, cfg *config.Config) {
 	// Initialize shared repositories needing external wiring
 	followsRepo := follows.NewRepository(db)
 	anchorsRepo := anchors.NewRepository(db)
+	anchorFollowsRepo := anchor_follows.NewRepository(db)
 
 	// Initialize Cloudinary for adapter usage (to delete assets)
 	// We can reuse the config.
@@ -114,12 +117,21 @@ func SetupRoutes(router *gin.Engine, db *mongo.Database, cfg *config.Config) {
 	anchorService := &authAnchorServiceAdapter{repo: anchorsRepo, cld: cld}
 
 	// Register feature routes
+	users.RegisterRoutes(api, db, cfg)
 	auth.RegisterRoutes(api, db, cfg, followService, anchorService)
-	anchors.RegisterRoutes(api, db, cfg)
+
+	// Set follower provider to break cycle
+	notifService := notifications.GetService(db)
+	notifService.SetFollowerProvider(anchorFollowsRepo)
+
+	anchors.RegisterRoutes(api, db, cfg, anchorFollowsRepo, notifService)
+	anchor_follows.RegisterRoutes(api, db, cfg)
 	follows.RegisterRoutes(api, db, cfg)
 	likes.RegisterRoutes(api, db, cfg)
 	comments.RegisterRoutes(api, db, cfg)
+
 	notifications.RegisterRoutes(api, db, cfg, anchorsRepo)
+
 	search.RegisterRoutes(api, db, cfg)
 	feed.RegisterRoutes(api, db, cfg)
 	media.RegisterRoutes(api, db, cfg)

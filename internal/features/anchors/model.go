@@ -41,6 +41,8 @@ type Anchor struct {
 	ViewCount          int                 `bson:"viewCount" json:"viewCount"`
 	ItemCount          int                 `bson:"itemCount" json:"itemCount"`
 	EngagementScore    int                 `bson:"engagementScore" json:"engagementScore"`
+	Version            int                 `bson:"version" json:"version"`             // Increments when items added
+	FollowerCount      int                 `bson:"followerCount" json:"followerCount"` // How many users follow this anchor
 
 	CreatedAt       time.Time  `bson:"createdAt" json:"createdAt"`
 	UpdatedAt       time.Time  `bson:"updatedAt" json:"updatedAt"`
@@ -210,6 +212,34 @@ type PaginationQuery struct {
 // PaginatedResponse represents a standard paginated response
 type PaginatedResponse struct {
 	Data       interface{} `json:"data"`
+	Pagination struct {
+		Page       int   `json:"page"`
+		Limit      int   `json:"limit"`
+		Total      int64 `json:"total"`
+		TotalPages int   `json:"totalPages"`
+		HasMore    bool  `json:"hasMore"`
+	} `json:"pagination"`
+}
+
+// AnchorClonerInfo represents the cloner's basic info
+type AnchorClonerInfo struct {
+	ID                primitive.ObjectID `json:"id"`
+	Username          string             `json:"username"`
+	DisplayName       string             `json:"displayName"`
+	ProfilePictureUrl string             `json:"profilePictureUrl"`
+}
+
+// AnchorCloneItem represents a single clone in the list
+type AnchorCloneItem struct {
+	ID        primitive.ObjectID `json:"id"`
+	Title     string             `json:"title"`
+	CreatedAt time.Time          `json:"createdAt"`
+	Cloner    AnchorClonerInfo   `json:"cloner"`
+}
+
+// AnchorClonesResponse represents the response for anchor clones list
+type AnchorClonesResponse struct {
+	Data       []AnchorCloneItem `json:"data"`
 	Pagination struct {
 		Page       int   `json:"page"`
 		Limit      int   `json:"limit"`
