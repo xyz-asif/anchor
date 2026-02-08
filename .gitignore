@@ -17,4 +17,6 @@ api.exe
 cmd/api/api
 
 # Secrets (optional - if you don't want to commit secrets)
-internal/config/serviceAccountKey.json
+internal/config/serviceAccountKey.jsoninternal/config/serviceAccountKey.json
+api
+.DS_Store
