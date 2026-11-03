@@ -10,6 +10,7 @@ import (
 const (
 	TypeMention      = "mention"
 	TypeComment      = "comment"
+	TypeReply        = "reply" // Someone replied to your comment
 	TypeLike         = "like"
 	TypeFollow       = "follow"
 	TypeClone        = "clone"
@@ -87,4 +88,8 @@ type MarkReadResponse struct {
 
 type MarkAllReadResponse struct {
 	MarkedCount int64 `json:"markedCount"`
+}
+
+type DeleteNotificationsResponse struct {
+	DeletedCount int64 `json:"deletedCount"`
 }

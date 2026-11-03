@@ -31,10 +31,10 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Con
 
 		// Likes
 		users.GET("/me/likes", authMiddleware, handler.GetUserLikes)
-		users.GET("/:id/likes", handler.GetUserLikes)
+		users.GET("/:id/likes", optionalAuthMiddleware, handler.GetUserLikes)
 
 		// Clones
 		users.GET("/me/clones", authMiddleware, handler.GetUserClones)
-		users.GET("/:id/clones", handler.GetUserClones)
+		users.GET("/:id/clones", optionalAuthMiddleware, handler.GetUserClones)
 	}
 }

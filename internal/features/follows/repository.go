@@ -51,7 +51,8 @@ func NewRepository(db *mongo.Database) *Repository {
 }
 
 // CreateFollow creates a new follow relationship
-func (r *Repository) CreateFollow(ctx context.Context, followerID, followingID primitive.ObjectID) error {
+// CreateFollow inserts a follow. created is false when it already existed.
+func (r *Repository) CreateFollow(ctx context.Context, followerID, followingID primitive.ObjectID) (created bool, err error) {
 	follow := &Follow{
 		ID:          primitive.NewObjectID(),
 		FollowerID:  followerID,
@@ -59,20 +60,18 @@ func (r *Repository) CreateFollow(ctx context.Context, followerID, followingID p
 		CreatedAt:   time.Now(),
 	}
 
-	_, err := r.collection.InsertOne(ctx, follow)
-	if err != nil {
-		// Check if it's a duplicate key error (already following)
+	if _, err := r.collection.InsertOne(ctx, follow); err != nil {
 		if mongo.IsDuplicateKeyError(err) {
-			return nil // Idempotent - already following
+			return false, nil // already following (unique index)
 		}
-		return err
+		return false, err
 	}
-
-	return nil
+	return true, nil
 }
 
 // DeleteFollow removes a follow relationship
-func (r *Repository) DeleteFollow(ctx context.Context, followerID, followingID primitive.ObjectID) error {
+// DeleteFollow removes a follow. deleted is false when there was nothing to remove.
+func (r *Repository) DeleteFollow(ctx context.Context, followerID, followingID primitive.ObjectID) (deleted bool, err error) {
 	filter := bson.M{
 		"followerId":  followerID,
 		"followingId": followingID,
@@ -80,15 +79,9 @@ func (r *Repository) DeleteFollow(ctx context.Context, followerID, followingID p
 
 	result, err := r.collection.DeleteOne(ctx, filter)
 	if err != nil {
-		return err
+		return false, err
 	}
-
-	// Idempotent - if not found, still return success
-	if result.DeletedCount == 0 {
-		return nil
-	}
-
-	return nil
+	return result.DeletedCount > 0, nil
 }
 
 // ExistsFollow checks if a follow relationship exists

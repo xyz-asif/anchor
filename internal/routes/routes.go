@@ -2,6 +2,7 @@ package routes
 
 import (
 	"context"
+	"log"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xyz-asif/gotodo/internal/config"
@@ -19,6 +20,7 @@ import (
 	"github.com/xyz-asif/gotodo/internal/features/search"
 	"github.com/xyz-asif/gotodo/internal/features/users"
 	"github.com/xyz-asif/gotodo/internal/pkg/cloudinary"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 )
@@ -33,45 +35,62 @@ func (s *authFollowServiceAdapter) GetStatus(ctx context.Context, f1, f2 primiti
 }
 
 func (s *authAnchorServiceAdapter) DeleteAllByUser(ctx context.Context, userID primitive.ObjectID) error {
-	// 1. Get all anchors
+	// 1. Get all anchors (including soft-deleted ones)
 	anchorsList, err := s.repo.GetAllUserAnchors(ctx, userID)
 	if err != nil {
 		return err
 	}
 
 	for _, anchor := range anchorsList {
-		// 2. Get items to find assets
+		// 2. Delete the anchor's media files, unless other users' clones still use them.
+		//    If items can't be read, still delete the anchor (files may be left behind).
 		items, err := s.repo.GetAnchorItems(ctx, anchor.ID)
 		if err != nil {
-			// Log error but continue? Or fail?
-			// Continue to try to delete as much as possible
-			continue
+			log.Printf("Account deletion: could not read items of anchor %s: %v", anchor.ID.Hex(), err)
 		}
-
-		// 3. Delete assets from Cloudinary
 		if s.cld != nil {
 			for _, item := range items {
-				if item.Type == "image" && item.ImageData != nil && item.ImageData.PublicID != "" {
-					_ = s.cld.Delete(ctx, item.ImageData.PublicID, "image")
+				var publicID, url, resourceType string
+				switch {
+				case item.ImageData != nil:
+					publicID, url, resourceType = item.ImageData.PublicID, item.ImageData.CloudinaryURL, "image"
+				case item.AudioData != nil:
+					publicID, url, resourceType = item.AudioData.PublicID, item.AudioData.CloudinaryURL, "video" // audio is "video" in Cloudinary
+				case item.FileData != nil:
+					publicID, url, resourceType = item.FileData.PublicID, item.FileData.CloudinaryURL, "raw"
 				}
-				if item.Type == "audio" && item.AudioData != nil && item.AudioData.PublicID != "" {
-					_ = s.cld.Delete(ctx, item.AudioData.PublicID, "video") // Audio uses "video" resource type in Cloudinary
+				if publicID == "" || assetSharedByOthers(ctx, s.db, anchor.ID, url) {
+					continue
 				}
+				_ = s.cld.Delete(ctx, publicID, resourceType)
 			}
 		}
 
-		// 4. Delete Anchor (and items from DB)
+		// A deleted clone lowers the original's clone count (soft-deleted ones already did)
+		if anchor.ClonedFromAnchorID != nil && anchor.DeletedAt == nil {
+			_ = s.repo.IncrementCloneCount(ctx, *anchor.ClonedFromAnchorID, -1)
+		}
+
+		// 3. Delete anchor and its items from the DB
 		if err := s.repo.DeleteAnchor(ctx, anchor.ID); err != nil {
 			return err
 		}
+
+		// Activity on this anchor by other users goes with it
+		_, _ = s.db.Collection("likes").DeleteMany(ctx, bson.M{"anchorId": anchor.ID})
+		_, _ = s.db.Collection("comments").DeleteMany(ctx, bson.M{"anchorId": anchor.ID})
+		_, _ = s.db.Collection("anchor_follows").DeleteMany(ctx, bson.M{"anchorId": anchor.ID})
 	}
-	return nil
+
+	// 4. The user's activity on other people's content, with counters recomputed
+	return cleanupUserActivity(ctx, s.db, userID)
 }
 
 // authAnchorServiceAdapter adapts anchors.Repository to auth.AnchorService interface
 type authAnchorServiceAdapter struct {
 	repo *anchors.Repository
 	cld  *cloudinary.Service
+	db   *mongo.Database
 }
 
 func (s *authAnchorServiceAdapter) GetPinnedAnchors(ctx context.Context, userID primitive.ObjectID, includePrivate bool) ([]auth.PinnedAnchorData, error) {
@@ -114,7 +133,7 @@ func SetupRoutes(router *gin.Engine, db *mongo.Database, cfg *config.Config) {
 
 	// Create adapters for auth package
 	followService := &authFollowServiceAdapter{repo: followsRepo}
-	anchorService := &authAnchorServiceAdapter{repo: anchorsRepo, cld: cld}
+	anchorService := &authAnchorServiceAdapter{repo: anchorsRepo, cld: cld, db: db}
 
 	// Register feature routes
 	users.RegisterRoutes(api, db, cfg)

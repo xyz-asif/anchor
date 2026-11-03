@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"regexp"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -35,7 +36,7 @@ func (r *Repository) SearchAnchors(ctx context.Context, query string, tag *strin
 	if tag != nil && *tag != "" {
 		filter["tags"] = bson.M{
 			"$regex": primitive.Regex{
-				Pattern: "^" + strings.ToLower(*tag) + "$",
+				Pattern: "^" + regexp.QuoteMeta(strings.ToLower(*tag)) + "$", // escaped: user input is literal text
 				Options: "i",
 			},
 		}
@@ -121,7 +122,7 @@ func (r *Repository) SearchTags(ctx context.Context, prefix string, limit int) (
 			"tags": bson.M{
 				"$elemMatch": bson.M{
 					"$regex": primitive.Regex{
-						Pattern: "^" + prefixLower,
+						Pattern: "^" + regexp.QuoteMeta(prefixLower), // escaped: user input is literal text
 						Options: "i",
 					},
 				},
@@ -137,7 +138,7 @@ func (r *Repository) SearchTags(ctx context.Context, prefix string, limit int) (
 		{{Key: "$match", Value: bson.M{
 			"lowerTag": bson.M{
 				"$regex": primitive.Regex{
-					Pattern: "^" + prefixLower,
+					Pattern: "^" + regexp.QuoteMeta(prefixLower), // escaped: user input is literal text
 					Options: "i",
 				},
 			},

@@ -78,7 +78,7 @@ func (h *Handler) GetFollowingFeed(c *gin.Context) {
 // @Produce json
 // @Param limit query int false "Items per page (default 20, max 50)"
 // @Param cursor query string false "Pagination cursor"
-// @Param category query string false "Category: trending, popular, recent (default trending)"
+// @Param category query string false "Category: trending, popular, recent, for_you (default trending). for_you ranks anchors tagged with your saved interests."
 // @Param tag query string false "Filter by tag"
 // @Success 200 {object} response.APIResponse{data=DiscoverResponse}
 // @Failure 400 {object} response.APIResponse
@@ -104,7 +104,10 @@ func (h *Handler) GetDiscoverFeed(c *gin.Context) {
 	}
 
 	if query.Cursor != "" {
-		if _, err := DecodeDiscoverCursor(query.Cursor); err != nil {
+		// Score-sorted categories need a score in the cursor; otherwise no page filter is
+		// applied and the client would get page 1 again forever (e.g. a "recent" cursor reused)
+		if cur, err := DecodeDiscoverCursor(query.Cursor); err != nil ||
+			(cur != nil && query.Category != CategoryRecent && cur.Score == nil) {
 			response.Error(c, http.StatusBadRequest, "Invalid cursor")
 			return
 		}
@@ -151,8 +154,9 @@ func (h *Handler) GetTagFeed(c *gin.Context) {
 		return
 	}
 
-	// Force tag from path
+	// Force tag from path; a topic page shows everyone's anchors, including people you follow
 	query.Tag = tagName
+	query.IncludeFollowed = true
 	if query.Category == "" {
 		query.Category = "popular" // Default sort for tag feed
 	}
@@ -163,7 +167,10 @@ func (h *Handler) GetTagFeed(c *gin.Context) {
 	}
 
 	if query.Cursor != "" {
-		if _, err := DecodeDiscoverCursor(query.Cursor); err != nil {
+		// Score-sorted categories need a score in the cursor; otherwise no page filter is
+		// applied and the client would get page 1 again forever (e.g. a "recent" cursor reused)
+		if cur, err := DecodeDiscoverCursor(query.Cursor); err != nil ||
+			(cur != nil && query.Category != CategoryRecent && cur.Score == nil) {
 			response.Error(c, http.StatusBadRequest, "Invalid cursor")
 			return
 		}

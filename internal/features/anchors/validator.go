@@ -6,15 +6,16 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // ValidateAnchorTitle validates the anchor title
 func ValidateAnchorTitle(title string) error {
 	title = strings.TrimSpace(title)
-	if len(title) < 3 {
+	if utf8.RuneCountInString(title) < 3 {
 		return errors.New("title must be at least 3 characters long")
 	}
-	if len(title) > 100 {
+	if utf8.RuneCountInString(title) > 100 {
 		return errors.New("title cannot exceed 100 characters")
 	}
 	return nil
@@ -23,7 +24,7 @@ func ValidateAnchorTitle(title string) error {
 // ValidateDescription validates the anchor description
 func ValidateDescription(description string) error {
 	description = strings.TrimSpace(description)
-	if len(description) > 500 {
+	if utf8.RuneCountInString(description) > 500 {
 		return errors.New("description cannot exceed 500 characters")
 	}
 	return nil

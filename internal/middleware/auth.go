@@ -28,7 +28,7 @@ func NewAuthMiddleware(repo *auth.Repository, cfg *config.Config) gin.HandlerFun
 		}
 
 		tokenString := parts[1]
-		claims, err := jwt.ValidateToken(tokenString, cfg.JWTSecret)
+		claims, err := jwt.ValidateAccessToken(tokenString, cfg.JWTSecret)
 		if err != nil {
 			response.Unauthorized(c, "Invalid or expired token", "INVALID_TOKEN")
 			c.Abort()
@@ -40,6 +40,12 @@ func NewAuthMiddleware(repo *auth.Repository, cfg *config.Config) gin.HandlerFun
 		if err != nil {
 			// differentiate between db error and not found if possible, but 401 is safest for auth
 			response.Unauthorized(c, "User not found", "USER_NOT_FOUND")
+			c.Abort()
+			return
+		}
+
+		if user.TokenRevoked(claims.IssuedTime()) {
+			response.Unauthorized(c, "Session has been revoked", "TOKEN_REVOKED")
 			c.Abort()
 			return
 		}
@@ -67,7 +73,7 @@ func OptionalAuthMiddleware(repo *auth.Repository, cfg *config.Config) gin.Handl
 		}
 
 		tokenString := parts[1]
-		claims, err := jwt.ValidateToken(tokenString, cfg.JWTSecret)
+		claims, err := jwt.ValidateAccessToken(tokenString, cfg.JWTSecret)
 		if err != nil {
 			// Invalid token - continue without auth (don't abort)
 			c.Next()
@@ -76,7 +82,7 @@ func OptionalAuthMiddleware(repo *auth.Repository, cfg *config.Config) gin.Handl
 		userID := claims.UserID
 
 		user, err := repo.GetUserByID(c.Request.Context(), userID)
-		if err != nil {
+		if err != nil || (user.TokenRevoked(claims.IssuedTime())) {
 			c.Next()
 			return
 		}

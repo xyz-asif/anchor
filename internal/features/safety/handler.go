@@ -1,6 +1,8 @@
 package safety
 
 import (
+	"log"
+
 	"github.com/gin-gonic/gin"
 	"github.com/xyz-asif/gotodo/internal/config"
 	"github.com/xyz-asif/gotodo/internal/features/auth"
@@ -54,6 +56,33 @@ func (h *Handler) CreateReport(c *gin.Context) {
 		return
 	}
 
+	ctx := c.Request.Context()
+
+	if req.TargetType == "user" && targetID == user.ID {
+		response.BadRequest(c, "You cannot report yourself", "CANNOT_REPORT_SELF")
+		return
+	}
+
+	targetExists, err := h.repo.TargetExists(ctx, req.TargetType, targetID)
+	if err != nil {
+		response.InternalServerError(c, "Database error", "DATABASE_ERROR")
+		return
+	}
+	if !targetExists {
+		response.NotFound(c, "Reported "+req.TargetType+" not found", "TARGET_NOT_FOUND")
+		return
+	}
+
+	alreadyReported, err := h.repo.HasOpenReport(ctx, user.ID, targetID)
+	if err != nil {
+		response.InternalServerError(c, "Database error", "DATABASE_ERROR")
+		return
+	}
+	if alreadyReported {
+		response.Conflict(c, "You have already reported this", "ALREADY_REPORTED")
+		return
+	}
+
 	report := &Report{
 		ReporterID: user.ID,
 		TargetID:   targetID,
@@ -61,12 +90,12 @@ func (h *Handler) CreateReport(c *gin.Context) {
 		Reason:     req.Reason,
 	}
 
-	if err := h.repo.CreateReport(c.Request.Context(), report); err != nil {
+	if err := h.repo.CreateReport(ctx, report); err != nil {
 		response.InternalServerError(c, "Failed to create report", "DATABASE_ERROR")
 		return
 	}
 
-	response.Created(c, "Report submitted")
+	response.Created(c, gin.H{"id": report.ID, "status": report.Status}, "Report submitted")
 }
 
 // @Summary Block a user
@@ -95,9 +124,25 @@ func (h *Handler) BlockUser(c *gin.Context) {
 		return
 	}
 
-	if err := h.repo.BlockUser(c.Request.Context(), user.ID, targetID); err != nil {
+	if targetID == user.ID {
+		response.BadRequest(c, "You cannot block yourself", "CANNOT_BLOCK_SELF")
+		return
+	}
+
+	ctx := c.Request.Context()
+	if target, err := h.authRepo.GetUserByObjectID(ctx, targetID); err != nil || target == nil {
+		response.NotFound(c, "User not found", "USER_NOT_FOUND")
+		return
+	}
+
+	if err := h.repo.BlockUser(ctx, user.ID, targetID); err != nil {
 		response.InternalServerError(c, "Failed to block user", "DATABASE_ERROR")
 		return
+	}
+
+	// Blocking ends any follow relationship in both directions
+	if err := h.repo.RemoveFollowsBetween(ctx, user.ID, targetID); err != nil {
+		log.Printf("Failed to remove follows between %s and %s: %v", user.ID.Hex(), targetID.Hex(), err)
 	}
 
 	response.Success(c, "User blocked successfully")
@@ -130,7 +175,7 @@ func (h *Handler) UnblockUser(c *gin.Context) {
 	}
 
 	if targetID == user.ID {
-		response.BadRequest(c, "INVALID_ACTION", "Cannot unblock yourself")
+		response.BadRequest(c, "Cannot unblock yourself", "INVALID_ACTION")
 		return
 	}
 
@@ -161,12 +206,12 @@ func (h *Handler) GetBlockedUsers(c *gin.Context) {
 	}
 	currentUser, ok := val.(*auth.User)
 	if !ok {
-		response.BadRequest(c, "User context error", "INTERNAL_ERROR")
+		response.InternalServerError(c, "User context error", "INTERNAL_ERROR")
 		return
 	}
 
 	if len(currentUser.BlockedUsers) == 0 {
-		response.Success(c, []auth.User{})
+		response.Success(c, []MutedUserInfo{})
 		return
 	}
 
@@ -185,7 +230,15 @@ func (h *Handler) GetBlockedUsers(c *gin.Context) {
 		return
 	}
 
-	// Respond with public profile data only? For blocking management, maybe full user object is overkill but okay.
-	// Or define a lightweight DTO. For now, returning User is consistent with other generic endpoints.
-	response.Success(c, users)
+	// Public fields only: never expose blocked users' email, Google ID or block lists
+	result := make([]MutedUserInfo, 0, len(users))
+	for _, u := range users {
+		result = append(result, MutedUserInfo{
+			ID:                u.ID,
+			Username:          u.Username,
+			DisplayName:       u.DisplayName,
+			ProfilePictureURL: u.ProfilePictureURL,
+		})
+	}
+	response.Success(c, result)
 }

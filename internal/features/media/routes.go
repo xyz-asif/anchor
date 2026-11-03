@@ -1,6 +1,8 @@
 package media
 
 import (
+	"github.com/xyz-asif/gotodo/internal/features/auth"
+	"github.com/xyz-asif/gotodo/internal/middleware"
 	"log"
 
 	"github.com/gin-gonic/gin"
@@ -23,7 +25,10 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Con
 
 	handler := NewHandler(cld)
 
+	// Both endpoints spend our resources (Cloudinary storage, outbound fetches): login required
+	authMiddleware := middleware.NewAuthMiddleware(auth.NewRepository(db), cfg)
 	media := router.Group("/media")
+	media.Use(authMiddleware)
 	{
 		media.POST("/upload", handler.UploadMedia)
 		media.GET("/preview", handler.GetLinkPreview)

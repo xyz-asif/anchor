@@ -35,3 +35,36 @@ func TestMiddleware_RateLimitExceeded(t *testing.T) {
 	require.Contains(t, data, "retry_after")
 	require.Contains(t, data, "reset_time")
 }
+
+func TestMiddleware_HeadersAreNumeric(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	lim := New(5, time.Minute)
+	r := gin.New()
+	r.Use(Middleware(lim))
+	r.GET("/", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+
+	require.Equal(t, 200, w.Code)
+	require.Equal(t, "5", w.Header().Get("X-RateLimit-Limit"))
+	require.Equal(t, "4", w.Header().Get("X-RateLimit-Remaining"))
+}
+
+func TestRouteLimits_OnlyMatchingRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(RouteLimits(map[string]*RateLimiter{"POST /items/:id": New(1, time.Minute)}))
+	r.POST("/items/:id", func(c *gin.Context) { c.Status(200) })
+	r.GET("/items/:id", func(c *gin.Context) { c.Status(200) })
+
+	do := func(method string) int {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(method, "/items/1", nil))
+		return w.Code
+	}
+	require.Equal(t, 200, do("POST"))
+	require.Equal(t, 429, do("POST"))
+	require.Equal(t, 200, do("GET")) // GET on the same path is not limited
+	require.Equal(t, 200, do("GET"))
+}

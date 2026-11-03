@@ -43,6 +43,13 @@ func NewRepository(db *mongo.Database) *Repository {
 				{Key: "createdAt", Value: -1},
 			},
 		},
+		{
+			Keys: bson.D{
+				{Key: "parentId", Value: 1},
+				{Key: "deletedAt", Value: 1},
+				{Key: "createdAt", Value: 1},
+			},
+		},
 	})
 
 	commentLikesCollection.Indexes().CreateMany(context.Background(), []mongo.IndexModel{
@@ -133,8 +140,11 @@ func (r *Repository) SoftDeleteComment(ctx context.Context, commentID primitive.
 
 // GetCommentsByAnchor retrieves comments for an anchor with pagination
 func (r *Repository) GetCommentsByAnchor(ctx context.Context, anchorID primitive.ObjectID, sort string, page, limit int) ([]Comment, int64, error) {
+	// Top-level comments only; replies are fetched per comment ("parentId": nil also matches
+	// comments created before replies existed, which have no parentId field)
 	filter := bson.M{
 		"anchorId":  anchorID,
+		"parentId":  nil,
 		"deletedAt": nil,
 	}
 
@@ -173,8 +183,8 @@ func (r *Repository) GetCommentsByAnchor(ctx context.Context, anchorID primitive
 	return comments, total, nil
 }
 
-// CreateCommentLike creates a like (idempotent)
-func (r *Repository) CreateCommentLike(ctx context.Context, commentID, userID primitive.ObjectID) error {
+// CreateCommentLike creates a like. created is false when it already existed.
+func (r *Repository) CreateCommentLike(ctx context.Context, commentID, userID primitive.ObjectID) (created bool, err error) {
 	like := CommentLike{
 		ID:        primitive.NewObjectID(),
 		CommentID: commentID,
@@ -182,24 +192,25 @@ func (r *Repository) CreateCommentLike(ctx context.Context, commentID, userID pr
 		CreatedAt: time.Now(),
 	}
 
-	_, err := r.commentLikesCollection.InsertOne(ctx, like)
-	if err != nil {
+	if _, err := r.commentLikesCollection.InsertOne(ctx, like); err != nil {
 		if mongo.IsDuplicateKeyError(err) {
-			return nil // Already liked, idempotent
+			return false, nil // already liked
 		}
-		return err
+		return false, err
 	}
-
-	return nil
+	return true, nil
 }
 
-// DeleteCommentLike removes a like (idempotent)
-func (r *Repository) DeleteCommentLike(ctx context.Context, commentID, userID primitive.ObjectID) error {
-	_, err := r.commentLikesCollection.DeleteOne(ctx, bson.M{
+// DeleteCommentLike removes a like. deleted is false when there was nothing to remove.
+func (r *Repository) DeleteCommentLike(ctx context.Context, commentID, userID primitive.ObjectID) (deleted bool, err error) {
+	result, err := r.commentLikesCollection.DeleteOne(ctx, bson.M{
 		"commentId": commentID,
 		"userId":    userID,
 	})
-	return err
+	if err != nil {
+		return false, err
+	}
+	return result.DeletedCount > 0, nil
 }
 
 // ExistsCommentLike checks if a like exists
@@ -260,4 +271,53 @@ func (r *Repository) IncrementCommentLikeCount(ctx context.Context, commentID pr
 	}
 
 	return nil
+}
+
+// GetReplies returns the replies to a top-level comment, oldest first
+func (r *Repository) GetReplies(ctx context.Context, parentID primitive.ObjectID, page, limit int) ([]Comment, int64, error) {
+	filter := bson.M{"parentId": parentID, "deletedAt": nil}
+
+	total, err := r.commentsCollection.CountDocuments(ctx, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	opts := options.Find().
+		SetSort(bson.D{{Key: "createdAt", Value: 1}, {Key: "_id", Value: 1}}).
+		SetSkip(int64((page - 1) * limit)).
+		SetLimit(int64(limit))
+	cursor, err := r.commentsCollection.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer cursor.Close(ctx)
+
+	replies := []Comment{}
+	if err := cursor.All(ctx, &replies); err != nil {
+		return nil, 0, err
+	}
+	return replies, total, nil
+}
+
+// IncrementReplyCount adjusts a comment's reply count, never going below zero
+func (r *Repository) IncrementReplyCount(ctx context.Context, commentID primitive.ObjectID, delta int) error {
+	filter := bson.M{"_id": commentID}
+	if delta < 0 {
+		filter["replyCount"] = bson.M{"$gte": -delta}
+	}
+	_, err := r.commentsCollection.UpdateOne(ctx, filter, bson.M{"$inc": bson.M{"replyCount": delta}})
+	return err
+}
+
+// SoftDeleteReplies soft-deletes all live replies of a comment and returns how many were deleted
+func (r *Repository) SoftDeleteReplies(ctx context.Context, parentID primitive.ObjectID) (int64, error) {
+	now := time.Now()
+	result, err := r.commentsCollection.UpdateMany(ctx,
+		bson.M{"parentId": parentID, "deletedAt": nil},
+		bson.M{"$set": bson.M{"deletedAt": now, "updatedAt": now}},
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.ModifiedCount, nil
 }

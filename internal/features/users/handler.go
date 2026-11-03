@@ -110,8 +110,8 @@ func (h *Handler) GetUserByUsername(c *gin.Context) {
 func (h *Handler) GetUserLikes(c *gin.Context) {
 	userIDStr := c.Param("id")
 
-	// Handle "me" case
-	if userIDStr == "me" {
+	// Handle "me" case (static /users/me/... routes have no :id param)
+	if userIDStr == "" || userIDStr == "me" {
 		currentUser, exists := c.Get("user")
 		if !exists {
 			response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
@@ -182,6 +182,11 @@ func (h *Handler) GetUserLikes(c *gin.Context) {
 		if !ok || anchor == nil || anchor.DeletedAt != nil {
 			continue
 		}
+		// Liked lists are visible to others: only public anchors, plus the viewer's own
+		// (private and link-only unlisted anchors must not leak through someone's likes)
+		if anchor.Visibility != anchors.VisibilityPublic && !isViewer(c, anchor.UserID) {
+			continue
+		}
 
 		// Get author
 		var authorInfo gin.H
@@ -233,8 +238,8 @@ func (h *Handler) GetUserLikes(c *gin.Context) {
 func (h *Handler) GetUserClones(c *gin.Context) {
 	userIDStr := c.Param("id")
 
-	// Handle "me" case
-	if userIDStr == "me" {
+	// Handle "me" case (static /users/me/... routes have no :id param)
+	if userIDStr == "" || userIDStr == "me" {
 		currentUser, exists := c.Get("user")
 		if !exists {
 			response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
@@ -270,7 +275,7 @@ func (h *Handler) GetUserClones(c *gin.Context) {
 	}
 
 	// Get cloned anchors (isClone=true, userId=userID)
-	clones, total, err := h.anchorsRepo.GetUserClonedAnchors(ctx, userID, page, limit)
+	clones, total, err := h.anchorsRepo.GetUserClonedAnchors(ctx, userID, page, limit, isOwnProfile(c, userID))
 	if err != nil {
 		response.InternalServerError(c, "Failed to fetch cloned anchors", "FETCH_FAILED")
 		return
@@ -342,4 +347,19 @@ func (h *Handler) GetUserClones(c *gin.Context) {
 			"hasMore":    page < totalPages,
 		},
 	})
+}
+
+// isOwnProfile reports whether the authenticated user (if any) is the given user
+func isOwnProfile(c *gin.Context, userID primitive.ObjectID) bool {
+	val, exists := c.Get("user")
+	if !exists {
+		return false
+	}
+	user, ok := val.(*auth.User)
+	return ok && user.ID == userID
+}
+
+// isViewer reports whether the authenticated user (if any) is userID
+func isViewer(c *gin.Context, userID primitive.ObjectID) bool {
+	return isOwnProfile(c, userID)
 }

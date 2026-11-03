@@ -6,7 +6,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/xyz-asif/gotodo/internal/config"
 	"github.com/xyz-asif/gotodo/internal/pkg/cloudinary"
-	idToken "github.com/xyz-asif/gotodo/internal/pkg/jwt"
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
@@ -64,48 +63,9 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Con
 			me.DELETE("/cover-image", handler.RemoveCoverImage)
 		}
 
-		// Public profile routes (after /me)
-		users.GET("/:id", func(c *gin.Context) {
-			// Manually run auth check without aborting
-			tokenString := c.GetHeader("Authorization")
-			if tokenString == "" || len(tokenString) < 8 {
-				c.Next()
-				return
-			}
-			bearerToken := tokenString[7:]
-			claims, err := idToken.ValidateToken(bearerToken, cfg.JWTSecret)
-			if err == nil {
-				user, err := repo.GetUserByID(c.Request.Context(), claims.UserID)
-				if err == nil {
-					c.Set("user", user)
-				}
-			}
-			c.Next()
-		}, handler.GetPublicProfile)
-
-		// Pinned anchors route
-		// Note: We use the same manual auth middleware for optional auth here too if needed,
-		// but GetPinnedAnchors logic handles "user" context if present.
-		// However, handler.go logic currently uses `c.Get("user")` directly.
-		// If we want it to work for unauthenticated users (public view), we need optional auth.
-		// Reuse the inline middleware logic
-		optionalAuth := func(c *gin.Context) {
-			tokenString := c.GetHeader("Authorization")
-			if tokenString == "" || len(tokenString) < 8 {
-				c.Next()
-				return
-			}
-			bearerToken := tokenString[7:]
-			claims, err := idToken.ValidateToken(bearerToken, cfg.JWTSecret)
-			if err == nil {
-				user, err := repo.GetUserByID(c.Request.Context(), claims.UserID)
-				if err == nil {
-					c.Set("user", user)
-				}
-			}
-			c.Next()
-		}
-
+		// Public profile routes (after /me). Optional auth: a valid token identifies the viewer.
+		optionalAuth := NewOptionalAuthMiddleware(repo, cfg)
+		users.GET("/:id", optionalAuth, handler.GetPublicProfile)
 		users.GET("/:id/pinned", optionalAuth, handler.GetPinnedAnchors)
 	}
 }

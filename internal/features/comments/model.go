@@ -15,16 +15,19 @@ const (
 
 // Comment represents a comment on an anchor
 type Comment struct {
-	ID        primitive.ObjectID   `bson:"_id,omitempty" json:"id"`
-	AnchorID  primitive.ObjectID   `bson:"anchorId" json:"anchorId"`
-	UserID    primitive.ObjectID   `bson:"userId" json:"userId"`
-	Content   string               `bson:"content" json:"content"`
-	Mentions  []primitive.ObjectID `bson:"mentions" json:"mentions"`
-	LikeCount int                  `bson:"likeCount" json:"likeCount"`
-	IsEdited  bool                 `bson:"isEdited" json:"isEdited"`
-	CreatedAt time.Time            `bson:"createdAt" json:"createdAt"`
-	UpdatedAt time.Time            `bson:"updatedAt" json:"updatedAt"`
-	DeletedAt *time.Time           `bson:"deletedAt,omitempty" json:"-"`
+	ID       primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	AnchorID primitive.ObjectID `bson:"anchorId" json:"anchorId"`
+	UserID   primitive.ObjectID `bson:"userId" json:"userId"`
+	// ParentID is set on replies and always points at a top-level comment (one level of threading)
+	ParentID   *primitive.ObjectID  `bson:"parentId,omitempty" json:"parentId,omitempty"`
+	ReplyCount int                  `bson:"replyCount" json:"replyCount"`
+	Content    string               `bson:"content" json:"content"`
+	Mentions   []primitive.ObjectID `bson:"mentions" json:"mentions"`
+	LikeCount  int                  `bson:"likeCount" json:"likeCount"`
+	IsEdited   bool                 `bson:"isEdited" json:"isEdited"`
+	CreatedAt  time.Time            `bson:"createdAt" json:"createdAt"`
+	UpdatedAt  time.Time            `bson:"updatedAt" json:"updatedAt"`
+	DeletedAt  *time.Time           `bson:"deletedAt,omitempty" json:"-"`
 }
 
 // CommentLike represents a like on a comment
@@ -72,6 +75,8 @@ type CommentEngagement struct {
 type CommentResponse struct {
 	ID         primitive.ObjectID   `json:"id"`
 	AnchorID   primitive.ObjectID   `json:"anchorId"`
+	ParentID   *primitive.ObjectID  `json:"parentId,omitempty"`
+	ReplyCount int                  `json:"replyCount"`
 	Content    string               `json:"content"`
 	Mentions   []primitive.ObjectID `json:"mentions"`
 	LikeCount  int                  `json:"likeCount"`
@@ -102,4 +107,21 @@ type PaginatedCommentsResponse struct {
 		HasMore    bool  `json:"hasMore"`
 	} `json:"pagination"`
 	Meta CommentListMeta `json:"meta"`
+}
+
+type RepliesListQuery struct {
+	Page  int `form:"page,default=1" binding:"min=1"`
+	Limit int `form:"limit,default=20" binding:"min=1,max=50"`
+}
+
+type PaginatedRepliesResponse struct {
+	ParentID   primitive.ObjectID `json:"parentId"`
+	Replies    []CommentResponse  `json:"replies"`
+	Pagination struct {
+		Page       int   `json:"page"`
+		Limit      int   `json:"limit"`
+		Total      int64 `json:"total"`
+		TotalPages int   `json:"totalPages"`
+		HasMore    bool  `json:"hasMore"`
+	} `json:"pagination"`
 }

@@ -132,6 +132,19 @@ type AddItemRequest struct {
 	Content *string `json:"content" binding:"omitempty,max=10000"`
 }
 
+// UpdateItemRequest is the payload for editing an item. Text items accept content,
+// URL items accept url (metadata is fetched again). Media items can't be edited.
+type UpdateItemRequest struct {
+	Content *string `json:"content" binding:"omitempty,max=10000"`
+	URL     *string `json:"url" binding:"omitempty"`
+}
+
+// CloneAnchorRequest holds optional overrides when cloning an anchor
+type CloneAnchorRequest struct {
+	Title      *string `json:"title" binding:"omitempty,min=3,max=100"`
+	Visibility *string `json:"visibility" binding:"omitempty,oneof=private unlisted public"`
+}
+
 // ReorderItemsRequest represents the payload for reordering items
 type ReorderItemsRequest struct {
 	ItemIDs []string `json:"itemIds" binding:"required,min=1"`

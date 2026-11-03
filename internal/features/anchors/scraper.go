@@ -2,23 +2,105 @@ package anchors
 
 import (
 	"context"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/net/html"
 )
 
-// FetchURLMetadata fetches and parses metadata from a given URL
-func FetchURLMetadata(ctx context.Context, targetURL string) (*URLData, error) {
-	// Create client with timeout
-	client := &http.Client{
+// maxPreviewBodyBytes caps how much of a remote page is read when scraping metadata
+const maxPreviewBodyBytes = 2 << 20 // 2MB
+
+// errBlockedAddress is returned when a URL resolves to a non-public address
+var errBlockedAddress = errors.New("destination address is not allowed")
+
+// blockedNets are special-purpose ranges not covered by the net.IP helpers below,
+// including IPv6 translation prefixes that can wrap an internal IPv4 address.
+var blockedNets = func() []*net.IPNet {
+	var nets []*net.IPNet
+	for _, cidr := range []string{
+		"0.0.0.0/8",      // "this network"
+		"100.64.0.0/10",  // carrier-grade NAT (also Alibaba Cloud metadata 100.100.100.200)
+		"192.0.0.0/24",   // IETF protocol assignments
+		"198.18.0.0/15",  // benchmarking
+		"240.0.0.0/4",    // reserved
+		"64:ff9b::/96",   // NAT64 (wraps IPv4)
+		"64:ff9b:1::/48", // local-use NAT64
+		"2002::/16",      // 6to4 (wraps IPv4)
+		"2001::/32",      // Teredo
+		"fc00::/7",       // unique local
+	} {
+		_, n, _ := net.ParseCIDR(cidr)
+		nets = append(nets, n)
+	}
+	return nets
+}()
+
+// isPublicIP reports whether ip is a globally routable unicast address
+func isPublicIP(ip net.IP) bool {
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() {
+		return false
+	}
+	for _, n := range blockedNets {
+		if n.Contains(ip) {
+			return false
+		}
+	}
+	return true
+}
+
+// safeHTTPClient returns a client that refuses to connect to private, loopback,
+// link-local (incl. cloud metadata) or otherwise non-public addresses. The check
+// runs at dial time, so it also covers redirects and DNS rebinding.
+func safeHTTPClient() *http.Client {
+	dialer := &net.Dialer{
+		Timeout: 5 * time.Second,
+		Control: func(network, address string, _ syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return err
+			}
+			ip := net.ParseIP(host)
+			if ip == nil || !isPublicIP(ip) {
+				return errBlockedAddress
+			}
+			return nil
+		},
+	}
+	return &http.Client{
 		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			DialContext:         dialer.DialContext,
+			TLSHandshakeTimeout: 5 * time.Second,
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return errors.New("too many redirects")
+			}
+			if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
+				return errors.New("unsupported redirect scheme")
+			}
+			return nil
+		},
+	}
+}
+
+// FetchURLMetadata fetches and parses metadata from a given URL.
+// Only http(s) URLs pointing at public addresses are fetched.
+func FetchURLMetadata(ctx context.Context, targetURL string) (*URLData, error) {
+	parsed, err := url.Parse(targetURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return nil, errors.New("only absolute http(s) URLs are supported")
 	}
 
-	// Create request
 	req, err := http.NewRequestWithContext(ctx, "GET", targetURL, nil)
 	if err != nil {
 		return nil, err
@@ -27,8 +109,7 @@ func FetchURLMetadata(ctx context.Context, targetURL string) (*URLData, error) {
 	// Set User-Agent to avoid blocks
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; AnchorBot/1.0)")
 
-	// Execute request
-	resp, err := client.Do(req)
+	resp, err := safeHTTPClient().Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -38,7 +119,7 @@ func FetchURLMetadata(ctx context.Context, targetURL string) (*URLData, error) {
 		return &URLData{OriginalURL: targetURL}, nil
 	}
 
-	return parseHTMLMetadata(resp.Body, targetURL), nil
+	return parseHTMLMetadata(io.LimitReader(resp.Body, maxPreviewBodyBytes), targetURL), nil
 }
 
 // parseHTMLMetadata parses the HTML body and extracts metadata

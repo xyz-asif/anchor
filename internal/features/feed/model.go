@@ -10,6 +10,7 @@ const (
 	CategoryTrending = "trending"
 	CategoryPopular  = "popular"
 	CategoryRecent   = "recent"
+	CategoryForYou   = "for_you" // popular anchors tagged with the user's saved interests
 )
 
 // FeedQuery represents the query parameters for filtering the feed
@@ -119,6 +120,10 @@ type DiscoverQuery struct {
 	Cursor   string `form:"cursor"`
 	Category string `form:"category"`
 	Tag      string `form:"tag"`
+
+	// IncludeFollowed keeps anchors from people you follow (used by the tag feed).
+	// Set by handlers only, never from the query string.
+	IncludeFollowed bool `form:"-"`
 }
 
 // DiscoverCursor for pagination (includes score for trending/popular)

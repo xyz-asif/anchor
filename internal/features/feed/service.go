@@ -8,6 +8,7 @@ import (
 	"github.com/xyz-asif/gotodo/internal/features/auth"
 	"github.com/xyz-asif/gotodo/internal/features/follows"
 	"github.com/xyz-asif/gotodo/internal/features/likes"
+	"github.com/xyz-asif/gotodo/internal/pkg/tags"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
@@ -96,14 +97,14 @@ func (s *Service) GetHomeFeed(
 		}, nil
 	}
 
-	// 5. Query Anchors
-	var blockedUserIDs []primitive.ObjectID
+	// 5. Query Anchors, without blocked or muted authors
+	var excludedUserIDs []primitive.ObjectID
 	currentUser, err := s.authRepo.GetUserByObjectID(ctx, userID)
 	if err == nil && currentUser != nil {
-		blockedUserIDs = currentUser.BlockedUsers
+		excludedUserIDs = append(append(excludedUserIDs, currentUser.BlockedUsers...), currentUser.MutedUsers...)
 	}
 
-	anchorsList, err := s.feedRepo.GetFeedAnchors(ctx, feedUserIDs, blockedUserIDs, cursor, query.Limit+1)
+	anchorsList, err := s.feedRepo.GetFeedAnchors(ctx, feedUserIDs, excludedUserIDs, cursor, query.Limit+1)
 	if err != nil {
 		return nil, err
 	}
@@ -269,7 +270,8 @@ func (s *Service) getFollowingAnchorsForFeed(ctx context.Context, userID primiti
 	items := make([]FollowingAnchorFeedItem, 0)
 	for _, f := range follows {
 		a, ok := anchorMap[f.AnchorID]
-		if !ok {
+		// Skip anchors that were deleted or made private by their owner after being followed
+		if !ok || a.DeletedAt != nil || (a.Visibility == anchors.VisibilityPrivate && a.UserID != userID) {
 			continue
 		}
 
@@ -331,7 +333,7 @@ func (s *Service) enrichWithAuthors(ctx context.Context, userIDs []primitive.Obj
 			Username:       user.Username,
 			DisplayName:    user.DisplayName,
 			ProfilePicture: &user.ProfilePictureURL,
-			IsVerified:     false, // Pending verification feature
+			IsVerified:     user.IsVerified,
 		}
 	}
 	return authorMap, nil
@@ -388,15 +390,14 @@ func (s *Service) enrichWithEngagement(
 func (s *Service) getPreviewsForAnchors(ctx context.Context, anchorIDs []primitive.ObjectID) (map[primitive.ObjectID]*FeedPreview, error) {
 	previewMap := make(map[primitive.ObjectID]*FeedPreview)
 
-	// Similar to like summary, this is N+1 but for 20 items.
-	// Optimization: Batch item query with $in anchors and take 3.
-	// But simple implementation first.
+	// One query for all anchors on the page (was one query per anchor)
+	itemsByAnchor, err := s.feedRepo.GetPreviewItemsForAnchors(ctx, anchorIDs, 3)
+	if err != nil {
+		return nil, err
+	}
 
 	for _, id := range anchorIDs {
-		items, err := s.feedRepo.GetPreviewItems(ctx, id, 3)
-		if err != nil {
-			return nil, err
-		}
+		items := itemsByAnchor[id]
 
 		previewItems := make([]FeedPreviewItem, len(items))
 		for i, item := range items {
@@ -412,19 +413,13 @@ func (s *Service) getPreviewsForAnchors(ctx context.Context, anchorIDs []primiti
 					preview.Thumbnail = &thumb
 				}
 				if item.URLData.Title != "" {
-					t := item.URLData.Title
-					if len(t) > 50 {
-						t = t[:50]
-					}
+					t := truncateRunes(item.URLData.Title, 50, "")
 					preview.Title = &t
 				}
 			} else if item.Type == "image" && item.ImageData != nil {
 				preview.Thumbnail = &item.ImageData.CloudinaryURL
 			} else if item.Type == "text" && item.TextData != nil {
-				t := item.TextData.Content
-				if len(t) > 100 {
-					t = t[:100] + "..."
-				}
+				t := truncateRunes(item.TextData.Content, 100, "...")
 				preview.Snippet = &t
 			}
 			previewItems[i] = preview
@@ -530,7 +525,10 @@ func (s *Service) GetDiscoverFeed(
 		if err != nil {
 			return nil, err
 		}
-		excludeUserIDs = append(followingIDs, *userID)
+		// Discover shows people you don't follow yet; the tag feed shows everyone
+		if !query.IncludeFollowed {
+			excludeUserIDs = append(append(excludeUserIDs, followingIDs...), *userID)
+		}
 	}
 
 	// 3. Get tag pointer
@@ -539,17 +537,30 @@ func (s *Service) GetDiscoverFeed(
 		tagPtr = &query.Tag
 	}
 
-	// 4. Query anchors
-	var blockedUserIDs []primitive.ObjectID
+	// 4. Query anchors, honouring the viewer's blocks, mutes, "not interested" and interests
+	var hiddenAnchorIDs []primitive.ObjectID
+	var interestTags []string
 	if isAuthenticated {
 		currentUser, err := s.authRepo.GetUserByObjectID(ctx, *userID)
 		if err == nil && currentUser != nil {
-			blockedUserIDs = currentUser.BlockedUsers
+			excludeUserIDs = append(append(excludeUserIDs, currentUser.BlockedUsers...), currentUser.MutedUsers...)
+			hiddenAnchorIDs = currentUser.HiddenAnchors
+			if query.Category == CategoryForYou {
+				interestTags = tags.NormalizeList(currentUser.Interests)
+				// If no public anchor matches any interest, fall back to popular instead of an
+				// empty feed (deterministic, so every page of the same scroll agrees)
+				if len(interestTags) > 0 {
+					if ok, err := s.feedRepo.AnyPublicAnchorWithTags(ctx, interestTags); err == nil && !ok {
+						interestTags = nil
+					}
+				}
+			}
 		}
 	}
+	// for_you without saved interests (or logged out) behaves like popular
 
 	anchorsList, err := s.feedRepo.GetDiscoverAnchors(
-		ctx, excludeUserIDs, blockedUserIDs, query.Category, tagPtr, cursor, query.Limit+1,
+		ctx, excludeUserIDs, hiddenAnchorIDs, interestTags, query.Category, tagPtr, cursor, query.Limit+1,
 	)
 	if err != nil {
 		return nil, err
@@ -611,11 +622,15 @@ func (s *Service) GetDiscoverFeed(
 		// Build empty engagement for unauthenticated
 		engagementMap = make(map[primitive.ObjectID]*FeedEngagement)
 		for _, a := range anchorsList {
-			likeSummary, _ := s.getLikeSummary(ctx, a.ID, a.LikeCount, nil)
+			// A failed summary lookup must not crash the feed: fall back to an empty summary
+			var summary FeedLikeSummary
+			if likeSummary, err := s.getLikeSummary(ctx, a.ID, a.LikeCount, nil); err == nil && likeSummary != nil {
+				summary = *likeSummary
+			}
 			engagementMap[a.ID] = &FeedEngagement{
 				HasLiked:    false,
 				HasCloned:   false,
-				LikeSummary: *likeSummary,
+				LikeSummary: summary,
 			}
 		}
 	}
@@ -727,4 +742,14 @@ func (s *Service) enrichDiscoverAuthors(ctx context.Context, userIDs []primitive
 		}
 	}
 	return authorMap, nil
+}
+
+// truncateRunes shortens s to at most max characters (not bytes, so multi-byte characters
+// are never cut in half), appending suffix when it was shortened.
+func truncateRunes(s string, max int, suffix string) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + suffix
 }

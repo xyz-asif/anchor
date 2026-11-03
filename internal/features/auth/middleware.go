@@ -27,7 +27,7 @@ func NewAuthMiddleware(repo *Repository, cfg *config.Config) gin.HandlerFunc {
 		}
 
 		tokenString := parts[1]
-		claims, err := idToken.ValidateToken(tokenString, cfg.JWTSecret)
+		claims, err := idToken.ValidateAccessToken(tokenString, cfg.JWTSecret)
 		if err != nil {
 			response.Unauthorized(c, "Invalid or expired token", "INVALID_TOKEN")
 			c.Abort()
@@ -43,7 +43,30 @@ func NewAuthMiddleware(repo *Repository, cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
+		if user.TokenRevoked(claims.IssuedTime()) {
+			response.Unauthorized(c, "Session has been revoked", "TOKEN_REVOKED")
+			c.Abort()
+			return
+		}
+
 		c.Set("user", user)
+		c.Next()
+	}
+}
+
+// NewOptionalAuthMiddleware sets "user" in the context when a valid access token is
+// present, and otherwise continues without authentication (never aborts).
+func NewOptionalAuthMiddleware(repo *Repository, cfg *config.Config) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		parts := strings.Split(c.GetHeader("Authorization"), " ")
+		if len(parts) == 2 && parts[0] == "Bearer" {
+			if claims, err := idToken.ValidateAccessToken(parts[1], cfg.JWTSecret); err == nil {
+				if user, err := repo.GetUserByID(c.Request.Context(), claims.UserID); err == nil && user != nil &&
+					!user.TokenRevoked(claims.IssuedTime()) {
+					c.Set("user", user)
+				}
+			}
+		}
 		c.Next()
 	}
 }

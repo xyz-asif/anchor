@@ -41,5 +41,7 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Con
 		comments.DELETE("/:id", authMiddleware, handler.DeleteComment)
 		comments.POST("/:id/like", authMiddleware, handler.LikeComment)
 		comments.GET("/:id/like/status", authMiddleware, handler.GetCommentLikeStatus)
+		comments.POST("/:id/replies", authMiddleware, handler.AddReply)
+		comments.GET("/:id/replies", optionalAuth, handler.ListReplies)
 	}
 }

@@ -40,22 +40,33 @@ func NewRepository(db *mongo.Database) *Repository {
 }
 
 // CreateFollow creates a new anchor follow
-func (r *Repository) CreateFollow(ctx context.Context, follow *AnchorFollow) error {
+// CreateFollow inserts a follow. created is false when the user already follows the anchor
+// (unique index on userId+anchorId), so concurrent requests can't double-count.
+func (r *Repository) CreateFollow(ctx context.Context, follow *AnchorFollow) (created bool, err error) {
 	follow.ID = primitive.NewObjectID()
 	follow.CreatedAt = time.Now()
 
-	_, err := r.collection.InsertOne(ctx, follow)
-	return err
+	if _, err := r.collection.InsertOne(ctx, follow); err != nil {
+		if mongo.IsDuplicateKeyError(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // DeleteFollow removes a follow relationship
-func (r *Repository) DeleteFollow(ctx context.Context, userID, anchorID primitive.ObjectID) error {
+// DeleteFollow removes a follow. deleted is false when there was nothing to remove.
+func (r *Repository) DeleteFollow(ctx context.Context, userID, anchorID primitive.ObjectID) (deleted bool, err error) {
 	filter := bson.M{
 		"userId":   userID,
 		"anchorId": anchorID,
 	}
-	_, err := r.collection.DeleteOne(ctx, filter)
-	return err
+	result, err := r.collection.DeleteOne(ctx, filter)
+	if err != nil {
+		return false, err
+	}
+	return result.DeletedCount > 0, nil
 }
 
 // GetFollow gets a specific follow relationship

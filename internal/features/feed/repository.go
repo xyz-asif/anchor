@@ -43,21 +43,20 @@ func (r *Repository) ensureIndexes() {
 func (r *Repository) GetFeedAnchors(
 	ctx context.Context,
 	userIDs []primitive.ObjectID,
-	blockedUserIDs []primitive.ObjectID, // New param
+	excludedUserIDs []primitive.ObjectID, // blocked and muted users
 	cursor *FeedCursor,
 	limit int,
 ) ([]anchors.Anchor, error) {
-	// Base filter: Authors in userIDs, Public or Unlisted, Not Deleted
+	// Base filter: Authors in userIDs, public only (unlisted anchors are link-only), not deleted
 	filter := bson.M{
 		"userId":     bson.M{"$in": userIDs},
-		"visibility": bson.M{"$in": []string{"public", "unlisted"}},
+		"visibility": "public",
 		"deletedAt":  nil,
 	}
 
-	// Filter out blocked users if provided (though userIDs should already be filtered by service)
-	// But as a safeguard:
-	if len(blockedUserIDs) > 0 {
-		filter["userId"] = bson.M{"$in": userIDs, "$nin": blockedUserIDs}
+	// Drop blocked and muted authors
+	if len(excludedUserIDs) > 0 {
+		filter["userId"] = bson.M{"$in": userIDs, "$nin": excludedUserIDs}
 	}
 
 	// Apply cursor pagination if present
@@ -156,8 +155,9 @@ func (r *Repository) GetUserClonedAnchors(
 // GetDiscoverAnchors retrieves anchors for discovery feed
 func (r *Repository) GetDiscoverAnchors(
 	ctx context.Context,
-	excludeUserIDs []primitive.ObjectID,
-	blockedUserIDs []primitive.ObjectID, // New param
+	excludeUserIDs []primitive.ObjectID, // followed users, self, blocked and muted users
+	hiddenAnchorIDs []primitive.ObjectID, // anchors the viewer marked "not interested"
+	interestTags []string, // for_you: only anchors with at least one of these tags
 	category string,
 	tag *string,
 	cursor *DiscoverCursor,
@@ -169,37 +169,23 @@ func (r *Repository) GetDiscoverAnchors(
 		"deletedAt":  nil,
 	}
 
-	// Exclude followed users, self, AND blocked users
-	allExcluded := excludeUserIDs
-	allExcluded = append(allExcluded, blockedUserIDs...)
-
-	if len(allExcluded) > 0 {
-		filter["userId"] = bson.M{"$nin": allExcluded}
+	if len(excludeUserIDs) > 0 {
+		filter["userId"] = bson.M{"$nin": excludeUserIDs}
+	}
+	if len(hiddenAnchorIDs) > 0 {
+		filter["_id"] = bson.M{"$nin": hiddenAnchorIDs}
 	}
 
-	// Filter out blocked users (combine with excludeUserIDs if needed, but separate is cleaner)
-	if len(blockedUserIDs) > 0 {
-		// If excludeUserIDs exists, merge
-		if _, ok := filter["userId"]; ok {
-			// Already has $nin, need to merge lists?
-			// MongoDB $nin can take a combined list.
-			// Ideally service should combine them.
-			// But here we can use $and if needed, but $nin merger is better.
-			// For simplicity, let's assume service merges them into excludeUserIDs?
-			// No, signature change requested in plan.
-			// Let's assume we update signature and handle logic.
-
-			// Actually, just append blockedUserIDs to excludeUserIDs in Service is easier?
-			// But let's follow the pattern and add it to signature if I can.
-			// If I add to signature, I should merge it here.
-		} else {
-			filter["userId"] = bson.M{"$nin": blockedUserIDs}
-		}
-	}
-
-	// Tag filter
+	// Tag filter (exact tag) and interest filter (any of the tags) can both apply
+	tagConditions := bson.M{}
 	if tag != nil && *tag != "" {
-		filter["tags"] = *tag
+		tagConditions["$all"] = []string{*tag}
+	}
+	if len(interestTags) > 0 {
+		tagConditions["$in"] = interestTags
+	}
+	if len(tagConditions) > 0 {
+		filter["tags"] = tagConditions
 	}
 
 	// Category-specific logic
@@ -215,7 +201,7 @@ func (r *Repository) GetDiscoverAnchors(
 			{Key: "createdAt", Value: -1},
 			{Key: "_id", Value: -1},
 		}
-	case "popular":
+	case "popular", "for_you":
 		sort = bson.D{
 			{Key: "engagementScore", Value: -1},
 			{Key: "createdAt", Value: -1},
@@ -271,4 +257,56 @@ func (r *Repository) GetDiscoverAnchors(
 	}
 
 	return results, nil
+}
+
+// GetPreviewItemsForAnchors returns the first `limit` items (by position) of each anchor in a
+// single aggregation, keyed by anchor ID. Requires MongoDB 5.2+ ($topN).
+func (r *Repository) GetPreviewItemsForAnchors(
+	ctx context.Context,
+	anchorIDs []primitive.ObjectID,
+	limit int,
+) (map[primitive.ObjectID][]anchors.Item, error) {
+	result := make(map[primitive.ObjectID][]anchors.Item, len(anchorIDs))
+	if len(anchorIDs) == 0 {
+		return result, nil
+	}
+
+	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"anchorId": bson.M{"$in": anchorIDs}, "deletedAt": nil}}},
+		{{Key: "$group", Value: bson.M{
+			"_id": "$anchorId",
+			"items": bson.M{"$topN": bson.M{
+				"n":      limit,
+				"sortBy": bson.M{"position": 1},
+				"output": "$$ROOT",
+			}},
+		}}},
+	}
+	cursor, err := r.itemsCollection.Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var groups []struct {
+		AnchorID primitive.ObjectID `bson:"_id"`
+		Items    []anchors.Item     `bson:"items"`
+	}
+	if err := cursor.All(ctx, &groups); err != nil {
+		return nil, err
+	}
+	for _, g := range groups {
+		result[g.AnchorID] = g.Items
+	}
+	return result, nil
+}
+
+// AnyPublicAnchorWithTags reports whether at least one public, non-deleted anchor has any of the tags
+func (r *Repository) AnyPublicAnchorWithTags(ctx context.Context, tagList []string) (bool, error) {
+	n, err := r.anchorsCollection.CountDocuments(ctx, bson.M{
+		"visibility": "public",
+		"deletedAt":  nil,
+		"tags":       bson.M{"$in": tagList},
+	}, options.Count().SetLimit(1))
+	return n > 0, err
 }

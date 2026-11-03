@@ -24,6 +24,7 @@ import (
 	"github.com/xyz-asif/gotodo/internal/config"
 	"github.com/xyz-asif/gotodo/internal/database"
 	"github.com/xyz-asif/gotodo/internal/middleware"
+	"github.com/xyz-asif/gotodo/internal/pkg/ratelimit"
 	"github.com/xyz-asif/gotodo/internal/pkg/response"
 	"github.com/xyz-asif/gotodo/internal/routes"
 
@@ -34,8 +35,19 @@ import (
 )
 
 func main() {
-	// Load config
+	// Load config and refuse to start with unsafe settings in production
 	cfg := config.Load()
+	warnings, err := cfg.Validate()
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, w := range warnings {
+		log.Printf("CONFIG WARNING: %s", w)
+	}
+	if cfg.IsProduction() && len(cfg.TrustedProxies) == 0 {
+		log.Printf("CONFIG WARNING: TRUSTED_PROXIES is empty. If this server runs behind a load balancer or " +
+			"reverse proxy, every client will share the proxy's IP and its rate limits; set TRUSTED_PROXIES.")
+	}
 
 	// Configure Swagger metadata at runtime
 	docs.SwaggerInfo.Title = "GoTodo API"
@@ -58,9 +70,40 @@ func main() {
 	}
 
 	router := gin.New()
+
+	// Only trust X-Forwarded-For from configured proxies (e.g. your load balancer).
+	// Otherwise clients could spoof their IP and bypass rate limits.
+	if err := router.SetTrustedProxies(cfg.TrustedProxies); err != nil {
+		log.Fatal("Invalid TRUSTED_PROXIES:", err)
+	}
+
 	router.Use(gin.Recovery())
 	router.Use(middleware.Logger())
 	router.Use(middleware.CORS(cfg.FrontendURL))
+
+	// Rate limiting (in-memory, per client IP; per instance if you run several).
+	// Must be registered before the routes below.
+	globalLimiter := ratelimit.New(cfg.RateLimitPerMinute, time.Minute)
+	authLimiter := ratelimit.New(cfg.AuthRateLimitPerMinute, time.Minute)
+	uploadLimiter := ratelimit.New(cfg.UploadRateLimitPerMinute, time.Minute)
+	for _, l := range []*ratelimit.RateLimiter{globalLimiter, authLimiter, uploadLimiter} {
+		l.StartCleanup(5 * time.Minute)
+	}
+	router.Use(ratelimit.Middleware(globalLimiter))
+	router.Use(ratelimit.RouteLimits(map[string]*ratelimit.RateLimiter{
+		// Login / token endpoints
+		"POST /api/v1/auth/google":    authLimiter,
+		"POST /api/v1/auth/dev-login": authLimiter,
+		"POST /api/v1/auth/refresh":   authLimiter,
+		// Uploads and endpoints that fetch remote URLs
+		"POST /api/v1/media/upload":               uploadLimiter,
+		"GET /api/v1/media/preview":               uploadLimiter,
+		"POST /api/v1/anchors/:id/items/upload":   uploadLimiter,
+		"POST /api/v1/anchors/:id/items":          uploadLimiter,
+		"PATCH /api/v1/anchors/:id/items/:itemId": uploadLimiter, // re-fetches link metadata
+		"POST /api/v1/users/me/profile-picture":   uploadLimiter,
+		"POST /api/v1/users/me/cover-image":       uploadLimiter,
+	}))
 
 	// Health check
 	router.GET("/health", func(c *gin.Context) {

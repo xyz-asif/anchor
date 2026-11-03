@@ -2,11 +2,13 @@ package interests
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xyz-asif/gotodo/internal/config"
 	"github.com/xyz-asif/gotodo/internal/features/auth"
 	"github.com/xyz-asif/gotodo/internal/pkg/response"
+	"github.com/xyz-asif/gotodo/internal/pkg/tags"
 )
 
 type Handler struct {
@@ -52,12 +54,20 @@ func (h *Handler) SaveInterests(c *gin.Context) {
 		return
 	}
 
-	if err := h.repo.UpdateUserInterests(c.Request.Context(), user.ID, req.Tags); err != nil {
+	// Store tags the same way anchor tags are stored (lowercase, no '#', no duplicates)
+	// so the for_you feed can match them against anchors.
+	tags := normalizeInterests(req.Tags)
+	if len(tags) == 0 {
+		response.BadRequest(c, "At least one valid interest is required (2-30 letters, digits or hyphens)", "VALIDATION_FAILED")
+		return
+	}
+
+	if err := h.repo.UpdateUserInterests(c.Request.Context(), user.ID, tags); err != nil {
 		response.InternalServerError(c, "Failed to save interests", "DATABASE_ERROR")
 		return
 	}
 
-	response.Success(c, "Interests saved successfully")
+	response.Success(c, gin.H{"interests": tags}, "Interests saved successfully")
 }
 
 // GetSuggestedInterests returns personalized or popular interest suggestions
@@ -79,9 +89,11 @@ func (h *Handler) GetSuggestedInterests(c *gin.Context) {
 	// Check if user is authenticated
 	var categories []Category
 	var basedOn string
+	saved := []string{}
 
 	if val, exists := c.Get("user"); exists {
 		if user, ok := val.(*auth.User); ok {
+			saved = normalizeInterests(user.Interests)
 			// Personalized suggestions
 			userTags, err := h.repo.GetSuggestedTags(c.Request.Context(), user.ID, limit)
 			if err == nil && len(userTags) > 0 {
@@ -103,9 +115,49 @@ func (h *Handler) GetSuggestedInterests(c *gin.Context) {
 	}
 
 	resp := SuggestedInterestsResponse{
-		Categories: categories,
+		Categories: withSavedInterests(categories, saved, limit),
 		BasedOn:    basedOn,
+		Selected:   saved,
 	}
 
 	response.Success(c, resp)
+}
+
+// normalizeInterests uses the same tag rules as anchors, so saved interests can match anchor tags
+func normalizeInterests(raw []string) []string {
+	return tags.NormalizeList(raw)
+}
+
+// withSavedInterests puts the user's saved interests first (marked selected), followed by
+// up to `limit` other suggestions, so an interest picker can show them pre-checked.
+func withSavedInterests(suggestions []Category, saved []string, limit int) []Category {
+	bySlug := map[string]Category{}
+	for _, cat := range suggestions {
+		bySlug[strings.ToLower(cat.Name)] = cat
+	}
+
+	result := make([]Category, 0, len(saved)+limit)
+	isSaved := map[string]bool{}
+	for _, tag := range saved {
+		isSaved[tag] = true
+		cat, ok := bySlug[tag]
+		if !ok {
+			cat = Category{Name: tag, Slug: generateSlug(tag), Icon: getIconForCategory(tag)}
+		}
+		cat.Selected = true
+		result = append(result, cat)
+	}
+
+	added := 0
+	for _, cat := range suggestions {
+		if added >= limit {
+			break
+		}
+		if isSaved[strings.ToLower(cat.Name)] {
+			continue
+		}
+		result = append(result, cat)
+		added++
+	}
+	return result
 }

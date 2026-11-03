@@ -51,7 +51,8 @@ func NewRepository(db *mongo.Database) *Repository {
 }
 
 // CreateLike creates a new like relationship
-func (r *Repository) CreateLike(ctx context.Context, anchorID, userID primitive.ObjectID) error {
+// CreateLike inserts a like. created is false when the user had already liked the anchor.
+func (r *Repository) CreateLike(ctx context.Context, anchorID, userID primitive.ObjectID) (created bool, err error) {
 	like := &Like{
 		ID:        primitive.NewObjectID(),
 		AnchorID:  anchorID,
@@ -59,20 +60,18 @@ func (r *Repository) CreateLike(ctx context.Context, anchorID, userID primitive.
 		CreatedAt: time.Now(),
 	}
 
-	_, err := r.collection.InsertOne(ctx, like)
-	if err != nil {
-		// Check if it's a duplicate key error (already liked)
+	if _, err := r.collection.InsertOne(ctx, like); err != nil {
 		if mongo.IsDuplicateKeyError(err) {
-			return nil // Idempotent - already liked
+			return false, nil // already liked (unique index on anchorId+userId)
 		}
-		return err
+		return false, err
 	}
-
-	return nil
+	return true, nil
 }
 
 // DeleteLike removes a like relationship
-func (r *Repository) DeleteLike(ctx context.Context, anchorID, userID primitive.ObjectID) error {
+// DeleteLike removes a like. deleted is false when there was no like to remove.
+func (r *Repository) DeleteLike(ctx context.Context, anchorID, userID primitive.ObjectID) (deleted bool, err error) {
 	filter := bson.M{
 		"anchorId": anchorID,
 		"userId":   userID,
@@ -80,15 +79,9 @@ func (r *Repository) DeleteLike(ctx context.Context, anchorID, userID primitive.
 
 	result, err := r.collection.DeleteOne(ctx, filter)
 	if err != nil {
-		return err
+		return false, err
 	}
-
-	// Idempotent - if not found, still return success
-	if result.DeletedCount == 0 {
-		return nil
-	}
-
-	return nil
+	return result.DeletedCount > 0, nil
 }
 
 // ExistsLike checks if a like relationship exists

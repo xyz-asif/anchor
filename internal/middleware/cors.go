@@ -27,7 +27,7 @@ func CORS(allowedOrigin string) gin.HandlerFunc {
 		// Always vary on origin and requested headers/method
 		c.Header("Vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers")
 		c.Header("Access-Control-Allow-Credentials", "true")
-		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 
 		// Reflect requested headers if present, otherwise set a sane default
 		reqHeaders := c.Request.Header.Get("Access-Control-Request-Headers")

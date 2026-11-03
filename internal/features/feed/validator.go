@@ -2,7 +2,8 @@ package feed
 
 import (
 	"errors"
-	"strings"
+
+	"github.com/xyz-asif/gotodo/internal/pkg/tags"
 )
 
 // ValidateFeedQuery validates the query parameters
@@ -44,13 +45,17 @@ func ValidateDiscoverQuery(query *DiscoverQuery) error {
 	}
 	if query.Category != CategoryTrending &&
 		query.Category != CategoryPopular &&
-		query.Category != CategoryRecent {
-		return errors.New("category must be: trending, popular, or recent")
+		query.Category != CategoryRecent &&
+		query.Category != CategoryForYou {
+		return errors.New("category must be: trending, popular, recent, or for_you")
 	}
 
-	// Normalize tag to lowercase
+	// Normalise the tag exactly like anchor tags are stored
 	if query.Tag != "" {
-		query.Tag = strings.ToLower(strings.TrimSpace(query.Tag))
+		query.Tag = tags.Normalize(query.Tag)
+		if query.Tag == "" {
+			return errors.New("invalid tag")
+		}
 	}
 
 	return nil

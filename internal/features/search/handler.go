@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	"math"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xyz-asif/gotodo/internal/config"
@@ -42,12 +43,12 @@ func NewHandler(repo *Repository, authRepo *auth.Repository, followsRepo *follow
 func (h *Handler) UnifiedSearch(c *gin.Context) {
 	var query UnifiedSearchQuery
 	if err := c.ShouldBindQuery(&query); err != nil {
-		response.BadRequest(c, "INVALID_QUERY", "Invalid query parameters")
+		response.BadRequest(c, "Invalid query parameters", "INVALID_QUERY")
 		return
 	}
 
 	if err := ValidateUnifiedSearchQuery(&query); err != nil {
-		response.BadRequest(c, "INVALID_QUERY", err.Error())
+		response.BadRequest(c, err.Error(), "INVALID_QUERY")
 		return
 	}
 
@@ -120,12 +121,12 @@ func (h *Handler) UnifiedSearch(c *gin.Context) {
 func (h *Handler) SearchAnchors(c *gin.Context) {
 	var query AnchorSearchQuery
 	if err := c.ShouldBindQuery(&query); err != nil {
-		response.BadRequest(c, "INVALID_QUERY", "Invalid query parameters")
+		response.BadRequest(c, "Invalid query parameters", "INVALID_QUERY")
 		return
 	}
 
 	if err := ValidateAnchorSearchQuery(&query); err != nil {
-		response.BadRequest(c, "INVALID_QUERY", err.Error())
+		response.BadRequest(c, err.Error(), "INVALID_QUERY")
 		return
 	}
 
@@ -138,7 +139,7 @@ func (h *Handler) SearchAnchors(c *gin.Context) {
 	// Search
 	anchors, total, err := h.repo.SearchAnchors(c.Request.Context(), query.Q, tagFilter, query.Sort, query.Page, query.Limit)
 	if err != nil {
-		response.InternalServerError(c, "SEARCH_FAILED", "Failed to search anchors")
+		response.InternalServerError(c, "Failed to search anchors", "SEARCH_FAILED")
 		return
 	}
 
@@ -178,12 +179,12 @@ func (h *Handler) SearchAnchors(c *gin.Context) {
 func (h *Handler) SearchUsers(c *gin.Context) {
 	var query UserSearchQuery
 	if err := c.ShouldBindQuery(&query); err != nil {
-		response.BadRequest(c, "INVALID_QUERY", "Invalid query parameters")
+		response.BadRequest(c, "Invalid query parameters", "INVALID_QUERY")
 		return
 	}
 
 	if err := ValidateUserSearchQuery(&query); err != nil {
-		response.BadRequest(c, "INVALID_QUERY", err.Error())
+		response.BadRequest(c, err.Error(), "INVALID_QUERY")
 		return
 	}
 
@@ -198,7 +199,7 @@ func (h *Handler) SearchUsers(c *gin.Context) {
 	// Search
 	users, total, err := h.repo.SearchUsers(c.Request.Context(), query.Q, query.Page, query.Limit)
 	if err != nil {
-		response.InternalServerError(c, "SEARCH_FAILED", "Failed to search users")
+		response.InternalServerError(c, "Failed to search users", "SEARCH_FAILED")
 		return
 	}
 
@@ -235,19 +236,19 @@ func (h *Handler) SearchUsers(c *gin.Context) {
 func (h *Handler) SearchTags(c *gin.Context) {
 	var query TagSearchQuery
 	if err := c.ShouldBindQuery(&query); err != nil {
-		response.BadRequest(c, "INVALID_QUERY", "Invalid query parameters")
+		response.BadRequest(c, "Invalid query parameters", "INVALID_QUERY")
 		return
 	}
 
 	if err := ValidateTagSearchQuery(&query); err != nil {
-		response.BadRequest(c, "INVALID_QUERY", err.Error())
+		response.BadRequest(c, err.Error(), "INVALID_QUERY")
 		return
 	}
 
 	// Search tags
 	tags, err := h.repo.SearchTags(c.Request.Context(), query.Q, query.Limit)
 	if err != nil {
-		response.InternalServerError(c, "SEARCH_FAILED", "Failed to search tags")
+		response.InternalServerError(c, "Failed to search tags", "SEARCH_FAILED")
 		return
 	}
 
@@ -380,9 +381,9 @@ func (h *Handler) enrichUserResults(ctx context.Context, users []UserSearchDoc, 
 // @Failure 400 {object} response.APIResponse
 // @Router /search/combined [get]
 func (h *Handler) CombinedSearch(c *gin.Context) {
-	q := c.Query("q")
-	if len(q) < 2 {
-		response.BadRequest(c, "Query too short (min 2 chars)", "INVALID_QUERY")
+	q := strings.TrimSpace(c.Query("q"))
+	if len(q) < 2 || len(q) > 100 {
+		response.BadRequest(c, "Query must be 2-100 characters", "INVALID_QUERY")
 		return
 	}
 

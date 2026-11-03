@@ -47,19 +47,19 @@ func NewHandler(repo *Repository, authRepo *auth.Repository, contentProvider Con
 func (h *Handler) ListNotifications(c *gin.Context) {
 	usr, exists := c.Get("user")
 	if !exists {
-		response.Unauthorized(c, "UNAUTHORIZED", "Authentication required")
+		response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
 		return
 	}
 	currentUser := usr.(*auth.User)
 
 	var query NotificationListQuery
 	if err := c.ShouldBindQuery(&query); err != nil {
-		response.BadRequest(c, "INVALID_QUERY", "Invalid query parameters")
+		response.BadRequest(c, "Invalid query parameters", "INVALID_QUERY")
 		return
 	}
 
 	if err := ValidateNotificationListQuery(&query); err != nil {
-		response.BadRequest(c, "INVALID_QUERY", err.Error())
+		response.BadRequest(c, err.Error(), "INVALID_QUERY")
 		return
 	}
 
@@ -71,7 +71,7 @@ func (h *Handler) ListNotifications(c *gin.Context) {
 		query.Limit,
 	)
 	if err != nil {
-		response.InternalServerError(c, "FETCH_FAILED", "Failed to fetch notifications")
+		response.InternalServerError(c, "Failed to fetch notifications", "FETCH_FAILED")
 		return
 	}
 
@@ -104,14 +104,14 @@ func (h *Handler) ListNotifications(c *gin.Context) {
 func (h *Handler) GetUnreadCount(c *gin.Context) {
 	usr, exists := c.Get("user")
 	if !exists {
-		response.Unauthorized(c, "UNAUTHORIZED", "Authentication required")
+		response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
 		return
 	}
 	currentUser := usr.(*auth.User)
 
 	count, err := h.repo.CountUnread(c.Request.Context(), currentUser.ID)
 	if err != nil {
-		response.InternalServerError(c, "COUNT_FAILED", "Failed to count notifications")
+		response.InternalServerError(c, "Failed to count notifications", "COUNT_FAILED")
 		return
 	}
 
@@ -134,7 +134,7 @@ func (h *Handler) GetUnreadCount(c *gin.Context) {
 func (h *Handler) MarkAsRead(c *gin.Context) {
 	usr, exists := c.Get("user")
 	if !exists {
-		response.Unauthorized(c, "UNAUTHORIZED", "Authentication required")
+		response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
 		return
 	}
 	currentUser := usr.(*auth.User)
@@ -142,25 +142,25 @@ func (h *Handler) MarkAsRead(c *gin.Context) {
 	notificationIDStr := c.Param("id")
 	notificationID, err := primitive.ObjectIDFromHex(notificationIDStr)
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid notification ID")
+		response.BadRequest(c, "Invalid notification ID", "INVALID_ID")
 		return
 	}
 
 	// Get notification to verify ownership
 	notification, err := h.repo.GetNotificationByID(c.Request.Context(), notificationID)
 	if err != nil {
-		response.NotFound(c, "NOT_FOUND", "Notification not found")
+		response.NotFound(c, "Notification not found", "NOT_FOUND")
 		return
 	}
 
 	// Verify ownership
 	if notification.RecipientID != currentUser.ID {
-		response.Forbidden(c, "FORBIDDEN", "Cannot mark others' notifications")
+		response.Forbidden(c, "Cannot mark others' notifications", "FORBIDDEN")
 		return
 	}
 
 	if err := h.repo.MarkAsRead(c.Request.Context(), notificationID); err != nil {
-		response.InternalServerError(c, "UPDATE_FAILED", "Failed to mark as read")
+		response.InternalServerError(c, "Failed to mark as read", "UPDATE_FAILED")
 		return
 	}
 
@@ -182,18 +182,82 @@ func (h *Handler) MarkAsRead(c *gin.Context) {
 func (h *Handler) MarkAllAsRead(c *gin.Context) {
 	usr, exists := c.Get("user")
 	if !exists {
-		response.Unauthorized(c, "UNAUTHORIZED", "Authentication required")
+		response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
 		return
 	}
 	currentUser := usr.(*auth.User)
 
 	count, err := h.repo.MarkAllAsRead(c.Request.Context(), currentUser.ID)
 	if err != nil {
-		response.InternalServerError(c, "UPDATE_FAILED", "Failed to mark all as read")
+		response.InternalServerError(c, "Failed to mark all as read", "UPDATE_FAILED")
 		return
 	}
 
 	response.Success(c, MarkAllReadResponse{MarkedCount: count})
+}
+
+// DeleteNotification godoc
+// @Summary Delete a notification
+// @Tags notifications
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Notification ID"
+// @Success 200 {object} response.APIResponse
+// @Failure 404 {object} response.APIResponse
+// @Router /notifications/{id} [delete]
+func (h *Handler) DeleteNotification(c *gin.Context) {
+	usr, exists := c.Get("user")
+	if !exists {
+		response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
+		return
+	}
+	currentUser := usr.(*auth.User)
+
+	notificationID, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		response.BadRequest(c, "Invalid notification ID", "INVALID_ID")
+		return
+	}
+
+	// Ownership is enforced in the query: other users' notifications look "not found"
+	deleted, err := h.repo.DeleteForRecipient(c.Request.Context(), notificationID, currentUser.ID)
+	if err != nil {
+		response.InternalServerError(c, "Failed to delete notification", "DELETE_FAILED")
+		return
+	}
+	if !deleted {
+		response.NotFound(c, "Notification not found", "NOT_FOUND")
+		return
+	}
+
+	response.Success(c, gin.H{"id": notificationID, "deleted": true})
+}
+
+// ClearNotifications godoc
+// @Summary Clear notifications
+// @Description Deletes all your notifications, or only the read ones with ?readOnly=true
+// @Tags notifications
+// @Produce json
+// @Security BearerAuth
+// @Param readOnly query bool false "Only delete notifications already marked read"
+// @Success 200 {object} response.APIResponse{data=DeleteNotificationsResponse}
+// @Router /notifications [delete]
+func (h *Handler) ClearNotifications(c *gin.Context) {
+	usr, exists := c.Get("user")
+	if !exists {
+		response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
+		return
+	}
+	currentUser := usr.(*auth.User)
+
+	readOnly := c.Query("readOnly") == "true"
+	count, err := h.repo.DeleteAllForRecipient(c.Request.Context(), currentUser.ID, readOnly)
+	if err != nil {
+		response.InternalServerError(c, "Failed to clear notifications", "DELETE_FAILED")
+		return
+	}
+
+	response.Success(c, DeleteNotificationsResponse{DeletedCount: count})
 }
 
 // Helper to enrich notifications with actor and anchor data

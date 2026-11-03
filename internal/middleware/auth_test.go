@@ -7,12 +7,14 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/xyz-asif/gotodo/internal/config"
 )
 
 func TestAuthMiddleware_NoHeader(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	// r.Use(Auth())
+	// A missing header is rejected before the user repository is touched, so nil is fine here
+	r.Use(NewAuthMiddleware(nil, &config.Config{JWTSecret: "test"}))
 	r.GET("/protected", func(c *gin.Context) {
 		c.JSON(200, gin.H{"ok": true})
 	})

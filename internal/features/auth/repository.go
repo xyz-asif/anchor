@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -14,6 +16,9 @@ import (
 )
 
 // Repository handles database interactions for the auth feature
+// cleanupLegacySessions makes the legacy-session cleanup run once per process
+var cleanupLegacySessions sync.Once
+
 type Repository struct {
 	collection              *mongo.Collection
 	refreshTokensCollection *mongo.Collection
@@ -70,6 +75,19 @@ func NewRepository(db *mongo.Database) *Repository {
 		},
 	})
 
+	// Sessions saved before tokens carried a unique ID all have tokenId "" and can never be
+	// matched to a token again. Remove them once per process so they stop blocking the unique index.
+	cleanupLegacySessions.Do(func() {
+		// Users created before this fix stored blockedUsers as null, and MongoDB can't
+		// $addToSet/$pull on null. Normalise them to empty lists once per process.
+		_, _ = collection.UpdateMany(context.Background(), bson.M{"blockedUsers": nil}, bson.M{"$set": bson.M{"blockedUsers": bson.A{}}})
+
+		res, err := refreshTokensCollection.DeleteMany(context.Background(), bson.M{"tokenId": bson.M{"$in": []interface{}{"", nil}}})
+		if err == nil && res.DeletedCount > 0 {
+			log.Printf("Removed %d legacy refresh token sessions without a token ID", res.DeletedCount)
+		}
+	})
+
 	return &Repository{
 		collection:              collection,
 		refreshTokensCollection: refreshTokensCollection,
@@ -78,6 +96,9 @@ func NewRepository(db *mongo.Database) *Repository {
 
 // CreateUser inserts a new user into the database
 func (r *Repository) CreateUser(ctx context.Context, user *User) error {
+	if user.BlockedUsers == nil {
+		user.BlockedUsers = []primitive.ObjectID{} // stored as [] so $addToSet/$pull work
+	}
 	user.CreatedAt = time.Now()
 	user.UpdatedAt = time.Now()
 
@@ -189,6 +210,10 @@ func (r *Repository) UsernameExists(ctx context.Context, username string) (bool,
 // IncrementAnchorCount increments or decrements the user's anchor count
 func (r *Repository) IncrementAnchorCount(ctx context.Context, userID primitive.ObjectID, delta int) error {
 	filter := bson.M{"_id": userID}
+	if delta < 0 {
+		// never let the counter go below zero
+		filter["anchorCount"] = bson.M{"$gte": -delta}
+	}
 	update := bson.M{
 		"$inc": bson.M{"anchorCount": delta},
 		"$set": bson.M{"updatedAt": time.Now()},
@@ -199,7 +224,7 @@ func (r *Repository) IncrementAnchorCount(ctx context.Context, userID primitive.
 		return err
 	}
 
-	if result.MatchedCount == 0 {
+	if result.MatchedCount == 0 && delta > 0 {
 		return errors.New("user not found")
 	}
 
@@ -209,6 +234,10 @@ func (r *Repository) IncrementAnchorCount(ctx context.Context, userID primitive.
 // IncrementFollowerCount increments or decrements a user's follower count
 func (r *Repository) IncrementFollowerCount(ctx context.Context, userID primitive.ObjectID, delta int) error {
 	filter := bson.M{"_id": userID}
+	if delta < 0 {
+		// never let the counter go below zero
+		filter["followerCount"] = bson.M{"$gte": -delta}
+	}
 	update := bson.M{
 		"$inc": bson.M{"followerCount": delta},
 		"$set": bson.M{"updatedAt": time.Now()},
@@ -219,7 +248,7 @@ func (r *Repository) IncrementFollowerCount(ctx context.Context, userID primitiv
 		return err
 	}
 
-	if result.MatchedCount == 0 {
+	if result.MatchedCount == 0 && delta > 0 {
 		return errors.New("user not found")
 	}
 
@@ -229,6 +258,10 @@ func (r *Repository) IncrementFollowerCount(ctx context.Context, userID primitiv
 // IncrementFollowingCount increments or decrements a user's following count
 func (r *Repository) IncrementFollowingCount(ctx context.Context, userID primitive.ObjectID, delta int) error {
 	filter := bson.M{"_id": userID}
+	if delta < 0 {
+		// never let the counter go below zero
+		filter["followingCount"] = bson.M{"$gte": -delta}
+	}
 	update := bson.M{
 		"$inc": bson.M{"followingCount": delta},
 		"$set": bson.M{"updatedAt": time.Now()},
@@ -239,7 +272,7 @@ func (r *Repository) IncrementFollowingCount(ctx context.Context, userID primiti
 		return err
 	}
 
-	if result.MatchedCount == 0 {
+	if result.MatchedCount == 0 && delta > 0 {
 		return errors.New("user not found")
 	}
 
@@ -355,7 +388,11 @@ func (r *Repository) RevokeRefreshToken(ctx context.Context, tokenID string) err
 
 // RevokeAllUserTokens revokes all refresh tokens for a user (Logout All Devices)
 func (r *Repository) RevokeAllUserTokens(ctx context.Context, userID primitive.ObjectID) error {
-	_, err := r.refreshTokensCollection.DeleteMany(ctx, bson.M{"userId": userID})
+	if _, err := r.refreshTokensCollection.DeleteMany(ctx, bson.M{"userId": userID}); err != nil {
+		return err
+	}
+	// Also invalidate already-issued access tokens (checked by the auth middleware)
+	_, err := r.collection.UpdateOne(ctx, bson.M{"_id": userID}, bson.M{"$set": bson.M{"tokensRevokedAt": time.Now()}})
 	return err
 }
 
@@ -365,4 +402,14 @@ func (r *Repository) DeleteUser(ctx context.Context, userID primitive.ObjectID) 
 	_ = r.RevokeAllUserTokens(ctx, userID)
 	_, err := r.collection.DeleteOne(ctx, bson.M{"_id": userID})
 	return err
+}
+
+// IsBlockedBetween reports whether either user has blocked the other.
+// Used to stop blocked users from following, liking, commenting on or cloning each other's content.
+func (r *Repository) IsBlockedBetween(ctx context.Context, me *User, otherID primitive.ObjectID) (bool, error) {
+	if me.HasBlocked(otherID) {
+		return true, nil
+	}
+	n, err := r.collection.CountDocuments(ctx, bson.M{"_id": otherID, "blockedUsers": me.ID}, options.Count().SetLimit(1))
+	return n > 0, err
 }

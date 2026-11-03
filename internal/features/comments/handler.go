@@ -2,6 +2,7 @@ package comments
 
 import (
 	"context"
+	"log"
 	"math"
 
 	"github.com/gin-gonic/gin"
@@ -50,7 +51,7 @@ func (h *Handler) AddComment(c *gin.Context) {
 	// Get current user
 	usr, exists := c.Get("user")
 	if !exists {
-		response.Unauthorized(c, "UNAUTHORIZED", "Authentication required")
+		response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
 		return
 	}
 	currentUser := usr.(*auth.User)
@@ -59,39 +60,50 @@ func (h *Handler) AddComment(c *gin.Context) {
 	anchorIDStr := c.Param("id")
 	anchorID, err := primitive.ObjectIDFromHex(anchorIDStr)
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid anchor ID")
+		response.BadRequest(c, "Invalid anchor ID", "INVALID_ID")
 		return
 	}
 
 	// Bind request
 	var req CreateCommentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "INVALID_REQUEST", "Invalid request format")
+		response.BadRequest(c, "Invalid request format", "INVALID_REQUEST")
 		return
 	}
 
 	// Validate
 	if err := ValidateCreateCommentRequest(&req); err != nil {
-		response.BadRequest(c, "VALIDATION_FAILED", err.Error())
+		response.BadRequest(c, err.Error(), "VALIDATION_FAILED")
 		return
 	}
 
 	// Get anchor and check access
 	anchor, err := h.anchorsRepo.GetAnchorByID(c.Request.Context(), anchorID)
 	if err != nil {
-		response.NotFound(c, "ANCHOR_NOT_FOUND", "Anchor not found")
+		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
 		return
 	}
 
 	if anchor.DeletedAt != nil {
-		response.NotFound(c, "ANCHOR_NOT_FOUND", "Anchor not found")
+		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
 		return
 	}
 
 	// Check access - can comment if owner OR public/unlisted
 	if !anchor.IsOwnedBy(currentUser.ID) {
 		if anchor.Visibility == anchors.VisibilityPrivate {
-			response.Forbidden(c, "ACCESS_DENIED", "Cannot comment on private anchor")
+			response.Forbidden(c, "Cannot comment on private anchor", "ACCESS_DENIED")
+			return
+		}
+	}
+
+	// Blocked users (either direction) can't comment on each other's anchors
+	if !anchor.IsOwnedBy(currentUser.ID) {
+		if blocked, err := h.authRepo.IsBlockedBetween(c.Request.Context(), currentUser, anchor.UserID); err != nil {
+			response.InternalServerError(c, "Failed to create comment", "CREATE_FAILED")
+			return
+		} else if blocked {
+			response.Forbidden(c, "You can't interact with this user", "USER_BLOCKED")
 			return
 		}
 	}
@@ -121,7 +133,7 @@ func (h *Handler) AddComment(c *gin.Context) {
 	}
 
 	if err := h.repo.CreateComment(c.Request.Context(), comment); err != nil {
-		response.InternalServerError(c, "CREATE_FAILED", "Failed to create comment")
+		response.InternalServerError(c, "Failed to create comment", "CREATE_FAILED")
 		return
 	}
 
@@ -169,19 +181,19 @@ func (h *Handler) ListComments(c *gin.Context) {
 	anchorIDStr := c.Param("id")
 	anchorID, err := primitive.ObjectIDFromHex(anchorIDStr)
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid anchor ID")
+		response.BadRequest(c, "Invalid anchor ID", "INVALID_ID")
 		return
 	}
 
 	// Get anchor and check access
 	anchor, err := h.anchorsRepo.GetAnchorByID(c.Request.Context(), anchorID)
 	if err != nil {
-		response.NotFound(c, "ANCHOR_NOT_FOUND", "Anchor not found")
+		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
 		return
 	}
 
 	if anchor.DeletedAt != nil {
-		response.NotFound(c, "ANCHOR_NOT_FOUND", "Anchor not found")
+		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
 		return
 	}
 
@@ -196,7 +208,7 @@ func (h *Handler) ListComments(c *gin.Context) {
 	// Check access for private anchor
 	if anchor.Visibility == anchors.VisibilityPrivate {
 		if currentUserID == nil || !anchor.IsOwnedBy(*currentUserID) {
-			response.Forbidden(c, "ACCESS_DENIED", "Cannot view comments on private anchor")
+			response.Forbidden(c, "Cannot view comments on private anchor", "ACCESS_DENIED")
 			return
 		}
 	}
@@ -204,19 +216,19 @@ func (h *Handler) ListComments(c *gin.Context) {
 	// Bind and validate query
 	var query CommentListQuery
 	if err := c.ShouldBindQuery(&query); err != nil {
-		response.BadRequest(c, "INVALID_QUERY", "Invalid query parameters")
+		response.BadRequest(c, "Invalid query parameters", "INVALID_QUERY")
 		return
 	}
 
 	if err := ValidateCommentListQuery(&query); err != nil {
-		response.BadRequest(c, "INVALID_QUERY", err.Error())
+		response.BadRequest(c, err.Error(), "INVALID_QUERY")
 		return
 	}
 
 	// Get comments
 	comments, total, err := h.repo.GetCommentsByAnchor(c.Request.Context(), anchorID, query.Sort, query.Page, query.Limit)
 	if err != nil {
-		response.InternalServerError(c, "FETCH_FAILED", "Failed to fetch comments")
+		response.InternalServerError(c, "Failed to fetch comments", "FETCH_FAILED")
 		return
 	}
 
@@ -256,20 +268,20 @@ func (h *Handler) GetComment(c *gin.Context) {
 	commentIDStr := c.Param("id")
 	commentID, err := primitive.ObjectIDFromHex(commentIDStr)
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid comment ID")
+		response.BadRequest(c, "Invalid comment ID", "INVALID_ID")
 		return
 	}
 
 	comment, err := h.repo.GetCommentByID(c.Request.Context(), commentID)
 	if err != nil {
-		response.NotFound(c, "COMMENT_NOT_FOUND", "Comment not found")
+		response.NotFound(c, "Comment not found", "COMMENT_NOT_FOUND")
 		return
 	}
 
 	// Check anchor access
 	anchor, err := h.anchorsRepo.GetAnchorByID(c.Request.Context(), comment.AnchorID)
-	if err != nil {
-		response.NotFound(c, "ANCHOR_NOT_FOUND", "Anchor not found")
+	if err != nil || anchor.DeletedAt != nil {
+		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
 		return
 	}
 
@@ -282,7 +294,7 @@ func (h *Handler) GetComment(c *gin.Context) {
 
 	if anchor.Visibility == anchors.VisibilityPrivate {
 		if currentUserID == nil || !anchor.IsOwnedBy(*currentUserID) {
-			response.Forbidden(c, "ACCESS_DENIED", "Cannot view comment on private anchor")
+			response.Forbidden(c, "Cannot view comment on private anchor", "ACCESS_DENIED")
 			return
 		}
 	}
@@ -319,7 +331,7 @@ func (h *Handler) GetComment(c *gin.Context) {
 func (h *Handler) EditComment(c *gin.Context) {
 	usr, exists := c.Get("user")
 	if !exists {
-		response.Unauthorized(c, "UNAUTHORIZED", "Authentication required")
+		response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
 		return
 	}
 	currentUser := usr.(*auth.User)
@@ -327,31 +339,31 @@ func (h *Handler) EditComment(c *gin.Context) {
 	commentIDStr := c.Param("id")
 	commentID, err := primitive.ObjectIDFromHex(commentIDStr)
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid comment ID")
+		response.BadRequest(c, "Invalid comment ID", "INVALID_ID")
 		return
 	}
 
 	var req UpdateCommentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "INVALID_REQUEST", "Invalid request format")
+		response.BadRequest(c, "Invalid request format", "INVALID_REQUEST")
 		return
 	}
 
 	if err := ValidateUpdateCommentRequest(&req); err != nil {
-		response.BadRequest(c, "VALIDATION_FAILED", err.Error())
+		response.BadRequest(c, err.Error(), "VALIDATION_FAILED")
 		return
 	}
 
 	// Get comment
 	comment, err := h.repo.GetCommentByID(c.Request.Context(), commentID)
 	if err != nil {
-		response.NotFound(c, "COMMENT_NOT_FOUND", "Comment not found")
+		response.NotFound(c, "Comment not found", "COMMENT_NOT_FOUND")
 		return
 	}
 
 	// Only author can edit
 	if comment.UserID != currentUser.ID {
-		response.Forbidden(c, "FORBIDDEN", "Cannot edit others' comments")
+		response.Forbidden(c, "Cannot edit others' comments", "FORBIDDEN")
 		return
 	}
 
@@ -379,7 +391,7 @@ func (h *Handler) EditComment(c *gin.Context) {
 		"isEdited": true,
 	})
 	if err != nil {
-		response.InternalServerError(c, "UPDATE_FAILED", "Failed to update comment")
+		response.InternalServerError(c, "Failed to update comment", "UPDATE_FAILED")
 		return
 	}
 
@@ -397,7 +409,9 @@ func (h *Handler) EditComment(c *gin.Context) {
 	// Get updated comment
 	updatedComment, _ := h.repo.GetCommentByID(c.Request.Context(), commentID)
 
-	commentResponse := h.buildCommentResponse(updatedComment, currentUser, false)
+	// Editing doesn't change whether the author liked their own comment: report the real value
+	hasLiked, _ := h.repo.ExistsCommentLike(c.Request.Context(), updatedComment.ID, currentUser.ID)
+	commentResponse := h.buildCommentResponse(updatedComment, currentUser, hasLiked)
 
 	response.Success(c, commentResponse)
 }
@@ -418,7 +432,7 @@ func (h *Handler) EditComment(c *gin.Context) {
 func (h *Handler) DeleteComment(c *gin.Context) {
 	usr, exists := c.Get("user")
 	if !exists {
-		response.Unauthorized(c, "UNAUTHORIZED", "Authentication required")
+		response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
 		return
 	}
 	currentUser := usr.(*auth.User)
@@ -426,38 +440,46 @@ func (h *Handler) DeleteComment(c *gin.Context) {
 	commentIDStr := c.Param("id")
 	commentID, err := primitive.ObjectIDFromHex(commentIDStr)
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid comment ID")
+		response.BadRequest(c, "Invalid comment ID", "INVALID_ID")
 		return
 	}
 
 	// Get comment
 	comment, err := h.repo.GetCommentByID(c.Request.Context(), commentID)
 	if err != nil {
-		response.NotFound(c, "COMMENT_NOT_FOUND", "Comment not found")
+		response.NotFound(c, "Comment not found", "COMMENT_NOT_FOUND")
 		return
 	}
 
 	// Get anchor to check ownership
 	anchor, err := h.anchorsRepo.GetAnchorByID(c.Request.Context(), comment.AnchorID)
-	if err != nil {
-		response.NotFound(c, "ANCHOR_NOT_FOUND", "Anchor not found")
+	if err != nil || anchor.DeletedAt != nil {
+		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
 		return
 	}
 
 	// Permission: comment author OR anchor owner
 	if comment.UserID != currentUser.ID && anchor.UserID != currentUser.ID {
-		response.Forbidden(c, "FORBIDDEN", "Cannot delete this comment")
+		response.Forbidden(c, "Cannot delete this comment", "FORBIDDEN")
 		return
 	}
 
 	// Soft delete
 	if err := h.repo.SoftDeleteComment(c.Request.Context(), commentID); err != nil {
-		response.InternalServerError(c, "DELETE_FAILED", "Failed to delete comment")
+		response.InternalServerError(c, "Failed to delete comment", "DELETE_FAILED")
 		return
 	}
 
-	// Decrement comment count
-	_ = h.anchorsRepo.IncrementCommentCount(c.Request.Context(), comment.AnchorID, -1)
+	// Keep counts in sync. anchor.commentCount counts top-level comments and replies.
+	removed := 1
+	if comment.ParentID != nil {
+		// A reply: one fewer reply on its parent
+		_ = h.repo.IncrementReplyCount(c.Request.Context(), *comment.ParentID, -1)
+	} else if n, err := h.repo.SoftDeleteReplies(c.Request.Context(), comment.ID); err == nil {
+		// A top-level comment: its replies go with it
+		removed += int(n)
+	}
+	_ = h.anchorsRepo.IncrementCommentCount(c.Request.Context(), comment.AnchorID, -removed)
 
 	// Update engagement score (async)
 	go func() {
@@ -485,7 +507,7 @@ func (h *Handler) DeleteComment(c *gin.Context) {
 func (h *Handler) LikeComment(c *gin.Context) {
 	usr, exists := c.Get("user")
 	if !exists {
-		response.Unauthorized(c, "UNAUTHORIZED", "Authentication required")
+		response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
 		return
 	}
 	currentUser := usr.(*auth.User)
@@ -493,66 +515,83 @@ func (h *Handler) LikeComment(c *gin.Context) {
 	commentIDStr := c.Param("id")
 	commentID, err := primitive.ObjectIDFromHex(commentIDStr)
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid comment ID")
+		response.BadRequest(c, "Invalid comment ID", "INVALID_ID")
 		return
 	}
 
 	var req CommentLikeActionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "INVALID_REQUEST", "Invalid request format")
+		response.BadRequest(c, "Invalid request format", "INVALID_REQUEST")
 		return
 	}
 
 	if err := ValidateCommentLikeActionRequest(&req); err != nil {
-		response.BadRequest(c, "INVALID_ACTION", err.Error())
+		response.BadRequest(c, err.Error(), "INVALID_ACTION")
 		return
 	}
 
 	// Get comment
 	comment, err := h.repo.GetCommentByID(c.Request.Context(), commentID)
 	if err != nil {
-		response.NotFound(c, "COMMENT_NOT_FOUND", "Comment not found")
+		response.NotFound(c, "Comment not found", "COMMENT_NOT_FOUND")
 		return
 	}
 
 	// Check anchor access
 	anchor, err := h.anchorsRepo.GetAnchorByID(c.Request.Context(), comment.AnchorID)
-	if err != nil {
-		response.NotFound(c, "ANCHOR_NOT_FOUND", "Anchor not found")
+	if err != nil || anchor.DeletedAt != nil {
+		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
 		return
 	}
 
 	if anchor.Visibility == anchors.VisibilityPrivate && !anchor.IsOwnedBy(currentUser.ID) {
-		response.Forbidden(c, "ACCESS_DENIED", "Cannot like comment on private anchor")
+		response.Forbidden(c, "Cannot like comment on private anchor", "ACCESS_DENIED")
 		return
 	}
 
 	var hasLiked bool
 
 	if req.Action == "like" {
-		err = h.repo.CreateCommentLike(c.Request.Context(), commentID, currentUser.ID)
+		if comment.UserID != currentUser.ID {
+			if blocked, err := h.authRepo.IsBlockedBetween(c.Request.Context(), currentUser, comment.UserID); err != nil {
+				response.InternalServerError(c, "Failed to like comment", "LIKE_FAILED")
+				return
+			} else if blocked {
+				response.Forbidden(c, "You can't interact with this user", "USER_BLOCKED")
+				return
+			}
+		}
+		created, err := h.repo.CreateCommentLike(c.Request.Context(), commentID, currentUser.ID)
 		if err != nil {
-			response.InternalServerError(c, "LIKE_FAILED", "Failed to like comment")
+			response.InternalServerError(c, "Failed to like comment", "LIKE_FAILED")
 			return
 		}
-		_ = h.repo.IncrementCommentLikeCount(c.Request.Context(), commentID, 1)
+		// Only a like that was actually inserted changes the count
+		if created {
+			_ = h.repo.IncrementCommentLikeCount(c.Request.Context(), commentID, 1)
+		}
 		hasLiked = true
 	} else {
-		err = h.repo.DeleteCommentLike(c.Request.Context(), commentID, currentUser.ID)
+		deleted, err := h.repo.DeleteCommentLike(c.Request.Context(), commentID, currentUser.ID)
 		if err != nil {
-			response.InternalServerError(c, "UNLIKE_FAILED", "Failed to unlike comment")
+			response.InternalServerError(c, "Failed to unlike comment", "UNLIKE_FAILED")
 			return
 		}
-		_ = h.repo.IncrementCommentLikeCount(c.Request.Context(), commentID, -1)
+		if deleted {
+			_ = h.repo.IncrementCommentLikeCount(c.Request.Context(), commentID, -1)
+		}
 		hasLiked = false
 	}
 
-	// Get updated comment
-	updatedComment, _ := h.repo.GetCommentByID(c.Request.Context(), commentID)
+	// Get updated count (keep the old value if the re-read fails)
+	likeCount := comment.LikeCount
+	if updated, err := h.repo.GetCommentByID(c.Request.Context(), commentID); err == nil && updated != nil {
+		likeCount = updated.LikeCount
+	}
 
 	response.Success(c, CommentLikeResponse{
 		HasLiked:  hasLiked,
-		LikeCount: updatedComment.LikeCount,
+		LikeCount: likeCount,
 	})
 }
 
@@ -572,7 +611,7 @@ func (h *Handler) LikeComment(c *gin.Context) {
 func (h *Handler) GetCommentLikeStatus(c *gin.Context) {
 	usr, exists := c.Get("user")
 	if !exists {
-		response.Unauthorized(c, "UNAUTHORIZED", "Authentication required")
+		response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
 		return
 	}
 	currentUser := usr.(*auth.User)
@@ -580,25 +619,25 @@ func (h *Handler) GetCommentLikeStatus(c *gin.Context) {
 	commentIDStr := c.Param("id")
 	commentID, err := primitive.ObjectIDFromHex(commentIDStr)
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid comment ID")
+		response.BadRequest(c, "Invalid comment ID", "INVALID_ID")
 		return
 	}
 
 	comment, err := h.repo.GetCommentByID(c.Request.Context(), commentID)
 	if err != nil {
-		response.NotFound(c, "COMMENT_NOT_FOUND", "Comment not found")
+		response.NotFound(c, "Comment not found", "COMMENT_NOT_FOUND")
 		return
 	}
 
 	// Check anchor access
 	anchor, err := h.anchorsRepo.GetAnchorByID(c.Request.Context(), comment.AnchorID)
-	if err != nil {
-		response.NotFound(c, "ANCHOR_NOT_FOUND", "Anchor not found")
+	if err != nil || anchor.DeletedAt != nil {
+		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
 		return
 	}
 
 	if anchor.Visibility == anchors.VisibilityPrivate && !anchor.IsOwnedBy(currentUser.ID) {
-		response.Forbidden(c, "ACCESS_DENIED", "Cannot access comment on private anchor")
+		response.Forbidden(c, "Cannot access comment on private anchor", "ACCESS_DENIED")
 		return
 	}
 
@@ -619,14 +658,16 @@ func (h *Handler) buildCommentResponse(comment *Comment, author *auth.User, hasL
 	}
 
 	return CommentResponse{
-		ID:        comment.ID,
-		AnchorID:  comment.AnchorID,
-		Content:   comment.Content,
-		Mentions:  comment.Mentions,
-		LikeCount: comment.LikeCount,
-		IsEdited:  comment.IsEdited,
-		CreatedAt: comment.CreatedAt,
-		UpdatedAt: comment.UpdatedAt,
+		ID:         comment.ID,
+		AnchorID:   comment.AnchorID,
+		ParentID:   comment.ParentID,
+		ReplyCount: comment.ReplyCount,
+		Content:    comment.Content,
+		Mentions:   comment.Mentions,
+		LikeCount:  comment.LikeCount,
+		IsEdited:   comment.IsEdited,
+		CreatedAt:  comment.CreatedAt,
+		UpdatedAt:  comment.UpdatedAt,
 		Author: CommentAuthor{
 			ID:             author.ID,
 			Username:       author.Username,
@@ -689,4 +730,205 @@ func (h *Handler) buildCommentListResponse(ctx context.Context, comments []Comme
 	}
 
 	return responses
+}
+
+// resolveMentions turns @usernames in content into existing user IDs
+func (h *Handler) resolveMentions(ctx context.Context, content string) []primitive.ObjectID {
+	usernames := ExtractMentions(content)
+	if len(usernames) == 0 {
+		return nil
+	}
+	userIDMap, err := h.authRepo.GetUserIDsByUsernames(ctx, usernames)
+	if err != nil {
+		return nil
+	}
+	var ids []primitive.ObjectID
+	for _, username := range usernames {
+		if id, ok := userIDMap[username]; ok {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// AddReply godoc
+// @Summary Reply to a comment
+// @Description Replies are one level deep: replying to a reply attaches the new reply to the same
+// @Description top-level comment, and the author of the comment you replied to is notified.
+// @Tags comments
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Comment ID being replied to"
+// @Param request body CreateCommentRequest true "Reply content"
+// @Success 201 {object} response.APIResponse{data=CommentResponse}
+// @Failure 400 {object} response.APIResponse
+// @Failure 403 {object} response.APIResponse
+// @Failure 404 {object} response.APIResponse
+// @Router /comments/{id}/replies [post]
+func (h *Handler) AddReply(c *gin.Context) {
+	usr, exists := c.Get("user")
+	if !exists {
+		response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
+		return
+	}
+	currentUser := usr.(*auth.User)
+
+	targetID, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		response.BadRequest(c, "Invalid comment ID", "INVALID_ID")
+		return
+	}
+
+	var req CreateCommentRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request format", "INVALID_REQUEST")
+		return
+	}
+	if err := ValidateCreateCommentRequest(&req); err != nil {
+		response.BadRequest(c, err.Error(), "VALIDATION_FAILED")
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	target, err := h.repo.GetCommentByID(ctx, targetID)
+	if err != nil {
+		response.NotFound(c, "Comment not found", "COMMENT_NOT_FOUND")
+		return
+	}
+
+	anchor, err := h.anchorsRepo.GetAnchorByID(ctx, target.AnchorID)
+	if err != nil || anchor.DeletedAt != nil {
+		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
+		return
+	}
+	if anchor.Visibility == anchors.VisibilityPrivate && !anchor.IsOwnedBy(currentUser.ID) {
+		response.Forbidden(c, "Cannot comment on private anchor", "ACCESS_DENIED")
+		return
+	}
+
+	// Blocked users (either direction) can't reply to each other or on each other's anchors
+	for _, other := range []primitive.ObjectID{anchor.UserID, target.UserID} {
+		if other == currentUser.ID {
+			continue
+		}
+		if blocked, err := h.authRepo.IsBlockedBetween(ctx, currentUser, other); err != nil {
+			response.InternalServerError(c, "Failed to create reply", "CREATE_FAILED")
+			return
+		} else if blocked {
+			response.Forbidden(c, "You can't interact with this user", "USER_BLOCKED")
+			return
+		}
+	}
+
+	// Replies always hang off the top-level comment
+	parentID := target.ID
+	if target.ParentID != nil {
+		parentID = *target.ParentID
+	}
+
+	reply := &Comment{
+		AnchorID: target.AnchorID,
+		UserID:   currentUser.ID,
+		ParentID: &parentID,
+		Content:  req.Content,
+		Mentions: h.resolveMentions(ctx, req.Content),
+	}
+	if err := h.repo.CreateComment(ctx, reply); err != nil {
+		response.InternalServerError(c, "Failed to create reply", "CREATE_FAILED")
+		return
+	}
+
+	if err := h.repo.IncrementReplyCount(ctx, parentID, 1); err != nil {
+		log.Printf("Failed to increment reply count for comment %s: %v", parentID.Hex(), err)
+	}
+	if err := h.anchorsRepo.IncrementCommentCount(ctx, anchor.ID, 1); err != nil {
+		log.Printf("Failed to increment comment count for anchor %s: %v", anchor.ID.Hex(), err)
+	}
+
+	go func(anchorID, anchorOwner, repliedTo primitive.ObjectID) {
+		_ = h.anchorsRepo.UpdateEngagementScore(context.Background(), anchorID)
+		data := &notifications.CommentData{
+			ID:       reply.ID,
+			AnchorID: reply.AnchorID,
+			Content:  reply.Content,
+			Mentions: reply.Mentions,
+		}
+		if err := h.notificationService.CreateReplyNotifications(context.Background(), data, repliedTo, anchorOwner, currentUser); err != nil {
+			log.Printf("Failed to create reply notifications: %v", err)
+		}
+	}(anchor.ID, anchor.UserID, target.UserID)
+
+	response.Created(c, h.buildCommentResponse(reply, currentUser, false))
+}
+
+// ListReplies godoc
+// @Summary List replies to a comment
+// @Description Oldest first. Works for public/unlisted anchors without login.
+// @Tags comments
+// @Produce json
+// @Param id path string true "Top-level comment ID"
+// @Param page query int false "Page number (default 1)"
+// @Param limit query int false "Items per page (default 20, max 50)"
+// @Success 200 {object} response.APIResponse{data=PaginatedRepliesResponse}
+// @Failure 403 {object} response.APIResponse
+// @Failure 404 {object} response.APIResponse
+// @Router /comments/{id}/replies [get]
+func (h *Handler) ListReplies(c *gin.Context) {
+	parentID, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		response.BadRequest(c, "Invalid comment ID", "INVALID_ID")
+		return
+	}
+
+	var query RepliesListQuery
+	if err := c.ShouldBindQuery(&query); err != nil {
+		response.BadRequest(c, "page must be >= 1 and limit between 1 and 50", "INVALID_QUERY")
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	parent, err := h.repo.GetCommentByID(ctx, parentID)
+	if err != nil {
+		response.NotFound(c, "Comment not found", "COMMENT_NOT_FOUND")
+		return
+	}
+
+	anchor, err := h.anchorsRepo.GetAnchorByID(ctx, parent.AnchorID)
+	if err != nil || anchor.DeletedAt != nil {
+		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
+		return
+	}
+
+	var currentUserID *primitive.ObjectID
+	if usr, exists := c.Get("user"); exists {
+		if user, ok := usr.(*auth.User); ok {
+			currentUserID = &user.ID
+		}
+	}
+	if anchor.Visibility == anchors.VisibilityPrivate && (currentUserID == nil || !anchor.IsOwnedBy(*currentUserID)) {
+		response.Forbidden(c, "Cannot view comments on private anchor", "ACCESS_DENIED")
+		return
+	}
+
+	replies, total, err := h.repo.GetReplies(ctx, parentID, query.Page, query.Limit)
+	if err != nil {
+		response.InternalServerError(c, "Failed to fetch replies", "FETCH_FAILED")
+		return
+	}
+
+	resp := PaginatedRepliesResponse{
+		ParentID: parentID,
+		Replies:  h.buildCommentListResponse(ctx, replies, currentUserID),
+	}
+	totalPages := int(math.Ceil(float64(total) / float64(query.Limit)))
+	resp.Pagination.Page = query.Page
+	resp.Pagination.Limit = query.Limit
+	resp.Pagination.Total = total
+	resp.Pagination.TotalPages = totalPages
+	resp.Pagination.HasMore = query.Page < totalPages
+
+	response.Success(c, resp)
 }

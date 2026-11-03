@@ -24,5 +24,27 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Con
 		users.POST("/:id/block", handler.BlockUser)
 		users.DELETE("/:id/block", handler.UnblockUser)
 		users.GET("/me/blocks", handler.GetBlockedUsers)
+
+		// Mute: hide someone's content from my feeds without blocking them
+		users.POST("/:id/mute", handler.MuteUser)
+		users.DELETE("/:id/mute", handler.UnmuteUser)
+		users.GET("/me/mutes", handler.GetMutedUsers)
+	}
+
+	// "Not interested" in an anchor: hide it from my discover/tag feeds
+	anchors := router.Group("/anchors")
+	anchors.Use(authMiddleware)
+	{
+		anchors.POST("/:id/hide", handler.HideAnchor)
+		anchors.DELETE("/:id/hide", handler.UnhideAnchor)
+	}
+
+	// Moderation (admins are configured via ADMIN_EMAILS)
+	admin := router.Group("/admin", authMiddleware, middleware.RequireAdmin(cfg))
+	{
+		admin.GET("/reports", handler.AdminListReports)
+		admin.GET("/reports/:id", handler.AdminGetReport)
+		admin.PATCH("/reports/:id", handler.AdminUpdateReport)
+		admin.PATCH("/users/:id/verification", handler.AdminSetVerification)
 	}
 }

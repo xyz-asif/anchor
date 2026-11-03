@@ -168,3 +168,36 @@ func (r *Repository) MarkAllAsRead(ctx context.Context, userID primitive.ObjectI
 	}
 	return result.ModifiedCount, nil
 }
+
+// DeleteForRecipient deletes one notification if it belongs to the user; returns false if not found
+func (r *Repository) DeleteForRecipient(ctx context.Context, notificationID, userID primitive.ObjectID) (bool, error) {
+	result, err := r.collection.DeleteOne(ctx, bson.M{"_id": notificationID, "recipientId": userID})
+	if err != nil {
+		return false, err
+	}
+	return result.DeletedCount > 0, nil
+}
+
+// DeleteAllForRecipient deletes the user's notifications (only read ones if readOnly)
+func (r *Repository) DeleteAllForRecipient(ctx context.Context, userID primitive.ObjectID, readOnly bool) (int64, error) {
+	filter := bson.M{"recipientId": userID}
+	if readOnly {
+		filter["isRead"] = true
+	}
+	result, err := r.collection.DeleteMany(ctx, filter)
+	if err != nil {
+		return 0, err
+	}
+	return result.DeletedCount, nil
+}
+
+// Exists reports whether a notification of this type from actor to recipient about resource exists
+func (r *Repository) Exists(ctx context.Context, recipientID, actorID primitive.ObjectID, notifType string, resourceID primitive.ObjectID) (bool, error) {
+	n, err := r.collection.CountDocuments(ctx, bson.M{
+		"recipientId": recipientID,
+		"actorId":     actorID,
+		"type":        notifType,
+		"resourceId":  resourceID,
+	}, options.Count().SetLimit(1))
+	return n > 0, err
+}

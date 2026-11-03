@@ -15,6 +15,9 @@ import (
 	"github.com/xyz-asif/gotodo/internal/pkg/response"
 )
 
+// maxFollowedAnchors caps how many followed anchors are loaded for the list endpoint
+const maxFollowedAnchors = 1000
+
 type Handler struct {
 	repo        *Repository
 	anchorsRepo *anchors.Repository
@@ -48,7 +51,7 @@ func NewHandler(repo *Repository, anchorsRepo *anchors.Repository, authRepo *aut
 func (h *Handler) FollowAnchor(c *gin.Context) {
 	currentUser, exists := c.Get("user")
 	if !exists {
-		response.Unauthorized(c, "UNAUTHORIZED", "Authentication required")
+		response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
 		return
 	}
 	user := currentUser.(*auth.User)
@@ -56,19 +59,19 @@ func (h *Handler) FollowAnchor(c *gin.Context) {
 	anchorIDStr := c.Param("id")
 	anchorID, err := primitive.ObjectIDFromHex(anchorIDStr)
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid anchor ID")
+		response.BadRequest(c, "Invalid anchor ID", "INVALID_ID")
 		return
 	}
 
 	var req FollowAnchorRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "INVALID_REQUEST", "Invalid request format")
+		response.BadRequest(c, "Invalid request format", "INVALID_REQUEST")
 		return
 	}
 
 	req.Action = strings.ToLower(strings.TrimSpace(req.Action))
 	if req.Action != "follow" && req.Action != "unfollow" {
-		response.BadRequest(c, "INVALID_ACTION", "Action must be 'follow' or 'unfollow'")
+		response.BadRequest(c, "Action must be 'follow' or 'unfollow'", "INVALID_ACTION")
 		return
 	}
 
@@ -77,19 +80,19 @@ func (h *Handler) FollowAnchor(c *gin.Context) {
 	// Get anchor
 	anchor, err := h.anchorsRepo.GetAnchorByID(ctx, anchorID)
 	if err != nil || anchor == nil || anchor.DeletedAt != nil {
-		response.NotFound(c, "ANCHOR_NOT_FOUND", "Anchor not found")
+		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
 		return
 	}
 
 	// Cannot follow own anchor
 	if anchor.UserID == user.ID {
-		response.BadRequest(c, "CANNOT_FOLLOW_OWN", "Cannot follow your own anchor")
+		response.BadRequest(c, "Cannot follow your own anchor", "CANNOT_FOLLOW_OWN")
 		return
 	}
 
 	// Cannot follow private anchor
 	if anchor.Visibility == "private" {
-		response.Forbidden(c, "ACCESS_DENIED", "Cannot follow private anchor")
+		response.Forbidden(c, "Cannot follow private anchor", "ACCESS_DENIED")
 		return
 	}
 
@@ -102,10 +105,22 @@ func (h *Handler) FollowAnchor(c *gin.Context) {
 			notifyOnUpdate = *req.NotifyOnUpdate
 		}
 
+		// Blocked users (either direction) can't follow each other's anchors
+		if blocked, err := h.authRepo.IsBlockedBetween(ctx, user, anchor.UserID); err != nil {
+			response.InternalServerError(c, "Failed to follow anchor", "FOLLOW_FAILED")
+			return
+		} else if blocked {
+			response.Forbidden(c, "You can't interact with this user", "USER_BLOCKED")
+			return
+		}
+
 		// Check if already following
-		existingFollow, _ := h.repo.GetFollow(ctx, user.ID, anchorID)
+		existingFollow, err := h.repo.GetFollow(ctx, user.ID, anchorID)
+		if err != nil {
+			response.InternalServerError(c, "Failed to follow anchor", "FOLLOW_FAILED")
+			return
+		}
 		if existingFollow == nil {
-			// New follow
 			follow := &AnchorFollow{
 				UserID:          user.ID,
 				AnchorID:        anchorID,
@@ -113,13 +128,15 @@ func (h *Handler) FollowAnchor(c *gin.Context) {
 				LastSeenVersion: anchor.Version,
 			}
 
-			if err := h.repo.CreateFollow(ctx, follow); err != nil {
-				response.InternalServerError(c, "FOLLOW_FAILED", "Failed to follow anchor")
+			created, err := h.repo.CreateFollow(ctx, follow)
+			if err != nil {
+				response.InternalServerError(c, "Failed to follow anchor", "FOLLOW_FAILED")
 				return
 			}
-
-			// Increment follower count
-			_ = h.anchorsRepo.IncrementFollowerCount(ctx, anchorID, 1)
+			// Only the request that actually inserted the follow increments the count
+			if created {
+				_ = h.anchorsRepo.IncrementFollowerCount(ctx, anchorID, 1)
+			}
 		} else {
 			// Update notification preference if specified
 			if req.NotifyOnUpdate != nil {
@@ -131,14 +148,13 @@ func (h *Handler) FollowAnchor(c *gin.Context) {
 
 		isFollowing = true
 	} else {
-		// Unfollow
-		existingFollow, _ := h.repo.GetFollow(ctx, user.ID, anchorID)
-		if existingFollow != nil {
-			if err := h.repo.DeleteFollow(ctx, user.ID, anchorID); err != nil {
-				response.InternalServerError(c, "UNFOLLOW_FAILED", "Failed to unfollow anchor")
-				return
-			}
-			// Decrement follower count
+		// Unfollow: only decrement when a follow was actually removed (safe under concurrency)
+		deleted, err := h.repo.DeleteFollow(ctx, user.ID, anchorID)
+		if err != nil {
+			response.InternalServerError(c, "Failed to unfollow anchor", "UNFOLLOW_FAILED")
+			return
+		}
+		if deleted {
 			_ = h.anchorsRepo.IncrementFollowerCount(ctx, anchorID, -1)
 		}
 
@@ -169,7 +185,7 @@ func (h *Handler) FollowAnchor(c *gin.Context) {
 func (h *Handler) GetFollowStatus(c *gin.Context) {
 	currentUser, exists := c.Get("user")
 	if !exists {
-		response.Unauthorized(c, "UNAUTHORIZED", "Authentication required")
+		response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
 		return
 	}
 	user := currentUser.(*auth.User)
@@ -177,7 +193,7 @@ func (h *Handler) GetFollowStatus(c *gin.Context) {
 	anchorIDStr := c.Param("id")
 	anchorID, err := primitive.ObjectIDFromHex(anchorIDStr)
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid anchor ID")
+		response.BadRequest(c, "Invalid anchor ID", "INVALID_ID")
 		return
 	}
 
@@ -185,8 +201,9 @@ func (h *Handler) GetFollowStatus(c *gin.Context) {
 
 	// Get anchor for current version
 	anchor, err := h.anchorsRepo.GetAnchorByID(ctx, anchorID)
-	if err != nil || anchor == nil || anchor.DeletedAt != nil {
-		response.NotFound(c, "ANCHOR_NOT_FOUND", "Anchor not found")
+	// Someone else's private anchor is reported as not found (don't reveal it exists)
+	if err != nil || anchor == nil || !anchor.IsAccessibleBy(&user.ID) {
+		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
 		return
 	}
 
@@ -227,7 +244,7 @@ func (h *Handler) GetFollowStatus(c *gin.Context) {
 func (h *Handler) ToggleNotifications(c *gin.Context) {
 	currentUser, exists := c.Get("user")
 	if !exists {
-		response.Unauthorized(c, "UNAUTHORIZED", "Authentication required")
+		response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
 		return
 	}
 	user := currentUser.(*auth.User)
@@ -235,13 +252,13 @@ func (h *Handler) ToggleNotifications(c *gin.Context) {
 	anchorIDStr := c.Param("id")
 	anchorID, err := primitive.ObjectIDFromHex(anchorIDStr)
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid anchor ID")
+		response.BadRequest(c, "Invalid anchor ID", "INVALID_ID")
 		return
 	}
 
 	var req ToggleNotificationsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "INVALID_REQUEST", "Invalid request format")
+		response.BadRequest(c, "Invalid request format", "INVALID_REQUEST")
 		return
 	}
 
@@ -250,13 +267,13 @@ func (h *Handler) ToggleNotifications(c *gin.Context) {
 	// Check if following
 	follow, _ := h.repo.GetFollow(ctx, user.ID, anchorID)
 	if follow == nil {
-		response.BadRequest(c, "NOT_FOLLOWING", "You are not following this anchor")
+		response.BadRequest(c, "You are not following this anchor", "NOT_FOLLOWING")
 		return
 	}
 
 	// Update
 	if err := h.repo.UpdateNotifyOnUpdate(ctx, user.ID, anchorID, req.NotifyOnUpdate); err != nil {
-		response.InternalServerError(c, "UPDATE_FAILED", "Failed to update notification preference")
+		response.InternalServerError(c, "Failed to update notification preference", "UPDATE_FAILED")
 		return
 	}
 
@@ -280,7 +297,7 @@ func (h *Handler) ToggleNotifications(c *gin.Context) {
 func (h *Handler) ListFollowingAnchors(c *gin.Context) {
 	currentUser, exists := c.Get("user")
 	if !exists {
-		response.Unauthorized(c, "UNAUTHORIZED", "Authentication required")
+		response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
 		return
 	}
 	user := currentUser.(*auth.User)
@@ -306,10 +323,11 @@ func (h *Handler) ListFollowingAnchors(c *gin.Context) {
 
 	ctx := c.Request.Context()
 
-	// Get follows
-	follows, total, err := h.repo.GetUserFollowingAnchors(ctx, user.ID, page, limit)
+	// Get all follows (capped): filtering by visibility/hasUpdates and custom sorting must
+	// happen before pagination, otherwise pages and totals are wrong.
+	follows, _, err := h.repo.GetUserFollowingAnchors(ctx, user.ID, 1, maxFollowedAnchors)
 	if err != nil {
-		response.InternalServerError(c, "FETCH_FAILED", "Failed to fetch following anchors")
+		response.InternalServerError(c, "Failed to fetch following anchors", "FETCH_FAILED")
 		return
 	}
 
@@ -364,6 +382,10 @@ func (h *Handler) ListFollowingAnchors(c *gin.Context) {
 	for _, follow := range follows {
 		anchor, ok := anchorsMap[follow.AnchorID]
 		if !ok || anchor == nil || anchor.DeletedAt != nil {
+			continue
+		}
+		// Anchors that became private after being followed are hidden from followers
+		if anchor.Visibility == anchors.VisibilityPrivate && anchor.UserID != user.ID {
 			continue
 		}
 
@@ -440,6 +462,18 @@ func (h *Handler) ListFollowingAnchors(c *gin.Context) {
 			return strings.ToLower(items[i].Title) < strings.ToLower(items[j].Title)
 		})
 	}
+
+	// Paginate the filtered, sorted list
+	total := int64(len(items))
+	start := (page - 1) * limit
+	if start > len(items) {
+		start = len(items)
+	}
+	end := start + limit
+	if end > len(items) {
+		end = len(items)
+	}
+	items = items[start:end]
 
 	totalPages := int(math.Ceil(float64(total) / float64(limit)))
 

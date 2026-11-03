@@ -29,6 +29,35 @@ type User struct {
 	UpdatedAt              time.Time            `bson:"updatedAt" json:"updatedAt"`
 	Interests              []string             `bson:"interests" json:"interests"`
 	BlockedUsers           []primitive.ObjectID `bson:"blockedUsers" json:"blockedUsers"`
+	MutedUsers             []primitive.ObjectID `bson:"mutedUsers,omitempty" json:"-"`      // hidden from my feeds, no notifications from them
+	HiddenAnchors          []primitive.ObjectID `bson:"hiddenAnchors,omitempty" json:"-"`   // "not interested" anchors, hidden from discover/tag feeds
+	TokensRevokedAt        *time.Time           `bson:"tokensRevokedAt,omitempty" json:"-"` // access tokens issued before this are rejected
+}
+
+// TokenRevoked reports whether an access token issued at issuedAt was revoked by
+// "log out of all devices" (tokens carry a millisecond issue time for this check).
+func (u *User) TokenRevoked(issuedAt time.Time) bool {
+	return u.TokensRevokedAt != nil && issuedAt.Before(u.TokensRevokedAt.Truncate(time.Millisecond))
+}
+
+// HasMuted reports whether this user has muted the other user
+func (u *User) HasMuted(otherID primitive.ObjectID) bool {
+	for _, id := range u.MutedUsers {
+		if id == otherID {
+			return true
+		}
+	}
+	return false
+}
+
+// HasBlocked reports whether this user has blocked the other user
+func (u *User) HasBlocked(otherID primitive.ObjectID) bool {
+	for _, id := range u.BlockedUsers {
+		if id == otherID {
+			return true
+		}
+	}
+	return false
 }
 
 // GoogleAuthRequest represents the payload for Google OAuth login

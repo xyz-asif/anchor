@@ -57,7 +57,7 @@ func (h *Handler) LikeAction(c *gin.Context) {
 	// Extract authenticated user
 	user, exists := c.Get("user")
 	if !exists {
-		response.Unauthorized(c, "UNAUTHORIZED", "Authentication required")
+		response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
 		return
 	}
 	currentUser := user.(*auth.User)
@@ -66,105 +66,102 @@ func (h *Handler) LikeAction(c *gin.Context) {
 	anchorIDStr := c.Param("id")
 	anchorID, err := primitive.ObjectIDFromHex(anchorIDStr)
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid anchor ID format")
+		response.BadRequest(c, "Invalid anchor ID format", "INVALID_ID")
 		return
 	}
 
 	// Bind request
 	var req LikeActionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "INVALID_REQUEST", err.Error())
+		response.BadRequest(c, `action is required and must be "like" or "unlike"`, "INVALID_REQUEST")
 		return
 	}
 
 	// Validate request
 	if err := ValidateLikeActionRequest(&req); err != nil {
-		response.BadRequest(c, "INVALID_ACTION", err.Error())
+		response.BadRequest(c, err.Error(), "INVALID_ACTION")
 		return
 	}
 
 	// Get anchor
 	anchor, err := h.anchorsRepo.GetAnchorByID(c.Request.Context(), anchorID)
 	if err != nil {
-		response.NotFound(c, "ANCHOR_NOT_FOUND", "Anchor not found")
+		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
 		return
 	}
 
 	// Check if anchor is deleted
 	if anchor.DeletedAt != nil {
-		response.NotFound(c, "ANCHOR_NOT_FOUND", "Anchor not found")
+		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
 		return
 	}
 
 	// Check access - user must be owner OR anchor must be public/unlisted
 	if !anchor.IsOwnedBy(currentUser.ID) {
 		if anchor.Visibility != anchors.VisibilityPublic && anchor.Visibility != anchors.VisibilityUnlisted {
-			response.Forbidden(c, "ACCESS_DENIED", "Cannot like private anchor")
+			response.Forbidden(c, "Cannot like private anchor", "ACCESS_DENIED")
 			return
 		}
 	}
 
+	ctx := c.Request.Context()
 	var hasLiked bool
 
 	if req.Action == "like" {
-		// Check if already liked (to prevent duplicate notifications)
-		wasAlreadyLiked, _ := h.repo.ExistsLike(c.Request.Context(), anchorID, currentUser.ID)
-
-		err = h.repo.CreateLike(c.Request.Context(), anchorID, currentUser.ID)
-		if err != nil {
-			response.InternalServerError(c, "LIKE_FAILED", "Failed to like anchor")
-			return
-		}
-
-		// Only increment if this is a new like (CreateLike is idempotent)
-		if !wasAlreadyLiked {
-			_ = h.anchorsRepo.IncrementLikeCount(c.Request.Context(), anchorID, 1)
-
-			// Create notification (async) - only for NEW likes
-			if anchor.UserID != currentUser.ID {
-				go func() {
-					_ = h.notificationService.CreateLikeNotification(
-						context.Background(),
-						anchorID,
-						anchor.Title,
-						currentUser.ID,
-						anchor.UserID,
-					)
-				}()
+		// Blocked users (either direction) can't like each other's anchors
+		if anchor.UserID != currentUser.ID {
+			if blocked, err := h.authRepo.IsBlockedBetween(ctx, currentUser, anchor.UserID); err != nil {
+				response.InternalServerError(c, "Failed to like anchor", "LIKE_FAILED")
+				return
+			} else if blocked {
+				response.Forbidden(c, "You can't interact with this user", "USER_BLOCKED")
+				return
 			}
 		}
 
-		// Update engagement score asynchronously
-		go func() {
-			_ = h.anchorsRepo.UpdateEngagementScore(context.Background(), anchorID)
-		}()
-
-		hasLiked = true
-	} else {
-		// Unlike (idempotent)
-		err = h.repo.DeleteLike(c.Request.Context(), anchorID, currentUser.ID)
+		// The unique index makes this safe under concurrency: only the request that
+		// actually inserted the like changes the count and sends a notification.
+		created, err := h.repo.CreateLike(ctx, anchorID, currentUser.ID)
 		if err != nil {
-			response.InternalServerError(c, "UNLIKE_FAILED", "Failed to unlike anchor")
+			response.InternalServerError(c, "Failed to like anchor", "LIKE_FAILED")
 			return
 		}
 
-		// Decrement anchor's like count
-		_ = h.anchorsRepo.IncrementLikeCount(c.Request.Context(), anchorID, -1)
+		if created {
+			_ = h.anchorsRepo.IncrementLikeCount(ctx, anchorID, 1)
 
-		// Update engagement score asynchronously
-		go func() {
-			_ = h.anchorsRepo.UpdateEngagementScore(context.Background(), anchorID)
-		}()
+			if anchor.UserID != currentUser.ID {
+				go func(anchorID primitive.ObjectID, title string, actorID, ownerID primitive.ObjectID) {
+					_ = h.notificationService.CreateLikeNotification(context.Background(), anchorID, title, actorID, ownerID)
+				}(anchorID, anchor.Title, currentUser.ID, anchor.UserID)
+			}
+			go func(id primitive.ObjectID) { _ = h.anchorsRepo.UpdateEngagementScore(context.Background(), id) }(anchorID)
+		}
+		hasLiked = true
+	} else {
+		deleted, err := h.repo.DeleteLike(ctx, anchorID, currentUser.ID)
+		if err != nil {
+			response.InternalServerError(c, "Failed to unlike anchor", "UNLIKE_FAILED")
+			return
+		}
 
+		// Only decrement when a like was actually removed
+		if deleted {
+			_ = h.anchorsRepo.IncrementLikeCount(ctx, anchorID, -1)
+			go func(id primitive.ObjectID) { _ = h.anchorsRepo.UpdateEngagementScore(context.Background(), id) }(anchorID)
+		}
 		hasLiked = false
 	}
 
-	// Fetch updated anchor to get current like count
-	anchor, _ = h.anchorsRepo.GetAnchorByID(c.Request.Context(), anchorID)
+	// Fetch updated like count (fall back to the earlier value if the re-read fails)
+	likeCount := anchor.LikeCount
+	if updated, err := h.anchorsRepo.GetAnchorByID(ctx, anchorID); err == nil && updated != nil {
+		likeCount = updated.LikeCount
+	}
 
 	resp := LikeActionResponse{
 		HasLiked:  hasLiked,
-		LikeCount: anchor.LikeCount,
+		LikeCount: likeCount,
 	}
 
 	response.Success(c, resp)
@@ -187,7 +184,7 @@ func (h *Handler) GetLikeStatus(c *gin.Context) {
 	// Extract authenticated user
 	user, exists := c.Get("user")
 	if !exists {
-		response.Unauthorized(c, "UNAUTHORIZED", "Authentication required")
+		response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
 		return
 	}
 	currentUser := user.(*auth.User)
@@ -196,27 +193,27 @@ func (h *Handler) GetLikeStatus(c *gin.Context) {
 	anchorIDStr := c.Param("id")
 	anchorID, err := primitive.ObjectIDFromHex(anchorIDStr)
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid anchor ID format")
+		response.BadRequest(c, "Invalid anchor ID format", "INVALID_ID")
 		return
 	}
 
 	// Get anchor
 	anchor, err := h.anchorsRepo.GetAnchorByID(c.Request.Context(), anchorID)
 	if err != nil {
-		response.NotFound(c, "ANCHOR_NOT_FOUND", "Anchor not found")
+		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
 		return
 	}
 
 	// Check if anchor is deleted
 	if anchor.DeletedAt != nil {
-		response.NotFound(c, "ANCHOR_NOT_FOUND", "Anchor not found")
+		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
 		return
 	}
 
 	// Check access
 	if !anchor.IsOwnedBy(currentUser.ID) {
 		if anchor.Visibility != anchors.VisibilityPublic && anchor.Visibility != anchors.VisibilityUnlisted {
-			response.Forbidden(c, "ACCESS_DENIED", "Cannot access private anchor")
+			response.Forbidden(c, "Cannot access private anchor", "ACCESS_DENIED")
 			return
 		}
 	}
@@ -224,7 +221,7 @@ func (h *Handler) GetLikeStatus(c *gin.Context) {
 	// Check if user has liked
 	hasLiked, err := h.repo.ExistsLike(c.Request.Context(), anchorID, currentUser.ID)
 	if err != nil {
-		response.InternalServerError(c, "STATUS_CHECK_FAILED", "Failed to check like status")
+		response.InternalServerError(c, "Failed to check like status", "STATUS_CHECK_FAILED")
 		return
 	}
 
@@ -254,20 +251,20 @@ func (h *Handler) ListLikers(c *gin.Context) {
 	anchorIDStr := c.Param("id")
 	anchorID, err := primitive.ObjectIDFromHex(anchorIDStr)
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid anchor ID format")
+		response.BadRequest(c, "Invalid anchor ID format", "INVALID_ID")
 		return
 	}
 
 	// Get anchor
 	anchor, err := h.anchorsRepo.GetAnchorByID(c.Request.Context(), anchorID)
 	if err != nil {
-		response.NotFound(c, "ANCHOR_NOT_FOUND", "Anchor not found")
+		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
 		return
 	}
 
 	// Check if anchor is deleted
 	if anchor.DeletedAt != nil {
-		response.NotFound(c, "ANCHOR_NOT_FOUND", "Anchor not found")
+		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
 		return
 	}
 
@@ -281,7 +278,7 @@ func (h *Handler) ListLikers(c *gin.Context) {
 	// Check access
 	if currentUserID == nil || !anchor.IsOwnedBy(*currentUserID) {
 		if anchor.Visibility != anchors.VisibilityPublic && anchor.Visibility != anchors.VisibilityUnlisted {
-			response.Forbidden(c, "ACCESS_DENIED", "Cannot access private anchor")
+			response.Forbidden(c, "Cannot access private anchor", "ACCESS_DENIED")
 			return
 		}
 	}
@@ -289,19 +286,19 @@ func (h *Handler) ListLikers(c *gin.Context) {
 	// Parse and validate query parameters
 	var query LikeListQuery
 	if err := c.ShouldBindQuery(&query); err != nil {
-		response.BadRequest(c, "INVALID_QUERY", err.Error())
+		response.BadRequest(c, err.Error(), "INVALID_QUERY")
 		return
 	}
 
 	if err := ValidateLikeListQuery(&query); err != nil {
-		response.BadRequest(c, "INVALID_QUERY", err.Error())
+		response.BadRequest(c, err.Error(), "INVALID_QUERY")
 		return
 	}
 
 	// Get likes
 	likes, total, err := h.repo.GetLikers(c.Request.Context(), anchorID, query.Page, query.Limit)
 	if err != nil {
-		response.InternalServerError(c, "FETCH_FAILED", "Failed to fetch likers")
+		response.InternalServerError(c, "Failed to fetch likers", "FETCH_FAILED")
 		return
 	}
 
@@ -314,7 +311,7 @@ func (h *Handler) ListLikers(c *gin.Context) {
 	// Fetch user details
 	users, err := h.authRepo.GetUsersByIDs(c.Request.Context(), userIDs)
 	if err != nil {
-		response.InternalServerError(c, "FETCH_USERS_FAILED", "Failed to fetch user details")
+		response.InternalServerError(c, "Failed to fetch user details", "FETCH_USERS_FAILED")
 		return
 	}
 
@@ -481,21 +478,33 @@ func (h *Handler) GetLikeSummaryEndpoint(c *gin.Context) {
 	anchorIDStr := c.Param("id")
 	anchorID, err := primitive.ObjectIDFromHex(anchorIDStr)
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid anchor ID format")
+		response.BadRequest(c, "Invalid anchor ID format", "INVALID_ID")
 		return
 	}
 
 	// Get current user if authenticated
 	var currentUserID *primitive.ObjectID
 	if user, exists := c.Get("user"); exists {
-		currentUser := user.(*auth.User)
-		currentUserID = &currentUser.ID
+		if currentUser, ok := user.(*auth.User); ok {
+			currentUserID = &currentUser.ID
+		}
+	}
+
+	// Same access rules as the anchor itself: deleted -> 404, someone else's private -> 403
+	anchor, err := h.anchorsRepo.GetAnchorByID(c.Request.Context(), anchorID)
+	if err != nil || anchor.DeletedAt != nil {
+		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
+		return
+	}
+	if !anchor.IsAccessibleBy(currentUserID) {
+		response.Forbidden(c, "Cannot access private anchor", "ACCESS_DENIED")
+		return
 	}
 
 	// Get like summary
 	summary, err := h.GetLikeSummary(c, anchorID, currentUserID)
 	if err != nil {
-		response.InternalServerError(c, "FETCH_FAILED", "Failed to fetch like summary")
+		response.InternalServerError(c, "Failed to fetch like summary", "FETCH_FAILED")
 		return
 	}
 

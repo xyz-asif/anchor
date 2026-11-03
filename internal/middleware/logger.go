@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xyz-asif/gotodo/internal/features/auth"
 )
 
 // ANSI color codes
@@ -69,7 +71,7 @@ func LoggerWithConfig(config LoggerConfig) gin.HandlerFunc {
 		ip := c.ClientIP()
 		userAgent := c.GetHeader("User-Agent")
 		contentType := c.GetHeader("Content-Type")
-		queryParams := c.Request.URL.RawQuery
+		queryParams := sanitizeQuery(c.Request.URL.RawQuery)
 
 		// Read and restore request body with size limits
 		var requestBody string
@@ -102,8 +104,13 @@ func LoggerWithConfig(config LoggerConfig) gin.HandlerFunc {
 		latency := time.Since(start)
 		status := writer.Status()
 		responseSize := writer.size
-		userID := c.GetString("userID")
-		email := c.GetString("email")
+		// The auth middleware stores the authenticated *auth.User under "user"
+		var userID, email string
+		if u, ok := c.Get("user"); ok {
+			if user, ok := u.(*auth.User); ok {
+				userID, email = user.ID.Hex(), user.Email
+			}
+		}
 
 		// Get response body if needed (smart: only for errors or if explicitly enabled)
 		var responseBody string
@@ -314,7 +321,30 @@ func sanitizeBody(body, contentType string) string {
 		}
 	}
 
-	return truncateString(body, 200)
+	// Form bodies: mask sensitive fields like JSON bodies
+	if strings.Contains(contentType, "application/x-www-form-urlencoded") {
+		return sanitizeQuery(body)
+	}
+
+	// Anything else (multipart uploads, plain text...) may contain secrets or binary data
+	return fmt.Sprintf("[%d bytes of %s not logged]", len(body), contentType)
+}
+
+// sanitizeQuery masks sensitive keys (token, password, secret...) in a URL-encoded string
+func sanitizeQuery(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	values, err := url.ParseQuery(raw)
+	if err != nil {
+		return "[unparseable query not logged]"
+	}
+	for key := range values {
+		if isSensitiveField(strings.ToLower(key)) {
+			values[key] = []string{"********"}
+		}
+	}
+	return values.Encode()
 }
 
 func hideSensitiveFields(data interface{}) interface{} {

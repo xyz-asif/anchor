@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // ValidateUpdateProfileRequest validates the profile update request
@@ -25,9 +26,9 @@ func ValidateUpdateProfileRequest(req *UpdateProfileRequest) error {
 	return nil
 }
 
-// ValidateDisplayName validates the display name
+// ValidateDisplayName validates the display name (length in characters, not bytes)
 func ValidateDisplayName(displayName string) error {
-	if len(displayName) < 2 || len(displayName) > 50 {
+	if n := utf8.RuneCountInString(strings.TrimSpace(displayName)); n < 2 || n > 50 {
 		return errors.New("display name must be between 2 and 50 characters")
 	}
 	return nil
@@ -35,22 +36,34 @@ func ValidateDisplayName(displayName string) error {
 
 // ValidateBio validates the bio
 func ValidateBio(bio string) error {
-	if len(bio) > 200 {
+	if utf8.RuneCountInString(bio) > 200 {
 		return errors.New("bio must not exceed 200 characters")
 	}
 	return nil
 }
 
-// ValidateUsername validates the username format
-func ValidateUsername(username string) error {
-	if len(username) < 3 || len(username) > 30 {
-		return errors.New("username must be between 3 and 30 characters")
-	}
+// reservedUsernames can't be taken by users (they collide with routes or imply authority)
+var reservedUsernames = map[string]bool{
+	"admin": true, "administrator": true, "api": true, "www": true, "app": true, "help": true,
+	"support": true, "anchor": true, "anchors": true, "user": true, "users": true, "settings": true,
+	"login": true, "logout": true, "signup": true, "register": true, "me": true, "feed": true,
+	"search": true, "notifications": true, "moderator": true, "staff": true, "official": true,
+}
 
-	// Alphanumeric and underscores only
-	match, _ := regexp.MatchString("^[a-zA-Z0-9_]+$", username)
-	if !match {
+var usernamePattern = regexp.MustCompile(`^[a-z0-9_]+$`)
+
+// ValidateUsername validates a (lowercased) username. This one rule is used by both the
+// availability check and the username change, so they can never disagree.
+func ValidateUsername(username string) error {
+	username = strings.ToLower(strings.TrimSpace(username))
+	if len(username) < 3 || len(username) > 20 {
+		return errors.New("username must be between 3 and 20 characters")
+	}
+	if !usernamePattern.MatchString(username) {
 		return errors.New("username can only contain letters, numbers, and underscores")
+	}
+	if reservedUsernames[username] {
+		return errors.New("this username is reserved")
 	}
 	return nil
 }

@@ -103,11 +103,14 @@ func (s *Service) UploadAudio(ctx context.Context, file multipart.File, filename
 		return nil, fmt.Errorf("failed to upload audio: %w", err)
 	}
 
-	// TODO: Extract duration via Admin API
-	// The upload response doesn't include duration in the current SDK version
-	// To get duration, we need to call: s.cld.Admin.Asset(ctx, admin.AssetParams{PublicID: result.PublicID})
-	// For now, duration will be 0 and should be extracted client-side or via webhook
+	// The typed UploadResult has no duration field, but Cloudinary returns it for
+	// audio/video uploads in the raw JSON response, which the SDK keeps in Response.
 	duration := 0.0
+	if raw, ok := result.Response.(map[string]interface{}); ok {
+		if d, ok := raw["duration"].(float64); ok {
+			duration = d
+		}
+	}
 
 	return &UploadResult{
 		URL:      result.SecureURL,

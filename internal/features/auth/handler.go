@@ -2,11 +2,12 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
+	"net/http"
 	"strings"
 	"time"
-
-	"regexp"
 
 	"firebase.google.com/go/v4/auth"
 	"github.com/gin-gonic/gin"
@@ -16,6 +17,7 @@ import (
 	idToken "github.com/xyz-asif/gotodo/internal/pkg/jwt"
 	"github.com/xyz-asif/gotodo/internal/pkg/response"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 // FollowService defines the interface for follow operations to avoid import cycle
@@ -75,52 +77,32 @@ func NewHandler(repo *Repository, firebaseClient *auth.Client, cfg *config.Confi
 func (h *Handler) CheckUsernameAvailability(c *gin.Context) {
 	username := c.Query("username")
 	if username == "" {
-		response.BadRequest(c, "MISSING_USERNAME", "Username query parameter is required")
+		response.BadRequest(c, "Username query parameter is required", "MISSING_USERNAME")
 		return
 	}
 
 	// Normalize
 	username = strings.ToLower(strings.TrimSpace(username))
 
-	// Validate format
-	if len(username) < 3 || len(username) > 20 {
+	// Same rules as PATCH /auth/username (length, characters, reserved names)
+	if err := ValidateUsername(username); err != nil {
 		response.Success(c, gin.H{
 			"username":  username,
 			"available": false,
-			"reason":    "Username must be 3-20 characters",
+			"reason":    err.Error(),
 		})
 		return
-	}
-
-	// Check alphanumeric + underscore only
-	validUsername := regexp.MustCompile(`^[a-z0-9_]+$`)
-	if !validUsername.MatchString(username) {
-		response.Success(c, gin.H{
-			"username":  username,
-			"available": false,
-			"reason":    "Username can only contain letters, numbers, and underscores",
-		})
-		return
-	}
-
-	// Check reserved usernames
-	reserved := []string{"admin", "api", "www", "app", "help", "support", "anchor", "anchors", "user", "users", "settings", "login", "logout", "signup", "register", "me", "feed", "search", "notifications"}
-	for _, r := range reserved {
-		if username == r {
-			response.Success(c, gin.H{
-				"username":  username,
-				"available": false,
-				"reason":    "This username is reserved",
-			})
-			return
-		}
 	}
 
 	ctx := c.Request.Context()
 
-	// Check if exists
-	existingUser, _ := h.repo.GetUserByUsername(ctx, username)
-	available := existingUser == nil
+	// Check if exists (a DB failure must not be reported as "available")
+	exists, err := h.repo.UsernameExists(ctx, username)
+	if err != nil {
+		response.InternalServerError(c, "Failed to check username", "DATABASE_ERROR")
+		return
+	}
+	available := !exists
 
 	resp := gin.H{
 		"username":  username,
@@ -144,6 +126,54 @@ func (h *Handler) getJWTConfig() *idToken.Config {
 	}
 }
 
+// issueTokens creates an access/refresh token pair for the user and stores the refresh
+// session. On failure it writes the error response and returns ok=false.
+func (h *Handler) issueTokens(c *gin.Context, user *User) (accessToken, refreshToken string, ok bool) {
+	accessToken, refreshToken, err := idToken.GenerateTokenPair(user.ID.Hex(), user.Email, h.getJWTConfig())
+	if err != nil {
+		response.InternalServerError(c, "Failed to generate tokens", "TOKEN_FAILED")
+		return "", "", false
+	}
+
+	claims, err := idToken.ValidateRefreshToken(refreshToken, h.config.JWTSecret)
+	if err != nil {
+		response.InternalServerError(c, "Failed to generate tokens", "TOKEN_FAILED")
+		return "", "", false
+	}
+
+	session := &RefreshTokenSession{
+		ID:        primitive.NewObjectID(),
+		UserID:    user.ID,
+		TokenID:   claims.ID,
+		ExpiresAt: claims.ExpiresAt.Time,
+		CreatedAt: time.Now(),
+		UserAgent: c.Request.UserAgent(),
+		IPAddress: c.ClientIP(),
+	}
+	if err := h.repo.SaveRefreshToken(c.Request.Context(), session); err != nil {
+		log.Printf("Failed to save refresh token session: %v", err)
+		response.InternalServerError(c, "Failed to create session", "SESSION_FAILED")
+		return "", "", false
+	}
+
+	return accessToken, refreshToken, true
+}
+
+// uniqueUsername returns base, or base followed by the first number that makes it unique
+func (h *Handler) uniqueUsername(ctx context.Context, base string) (string, error) {
+	username := base
+	for counter := 1; ; counter++ {
+		exists, err := h.repo.UsernameExists(ctx, username)
+		if err != nil {
+			return "", err
+		}
+		if !exists {
+			return username, nil
+		}
+		username = fmt.Sprintf("%s%d", base, counter)
+	}
+}
+
 // GoogleLogin handles Google OAuth login/registration
 // @Summary Login with Google
 // @Description Authenticate user using Google ID token
@@ -163,10 +193,21 @@ func (h *Handler) GoogleLogin(c *gin.Context) {
 	}
 
 	// Verify Google Token
-	googleUser, err := VerifyGoogleToken(c.Request.Context(), req.GoogleIDToken, h.config.GoogleClientID)
+	googleUser, err := VerifyGoogleToken(c.Request.Context(), req.GoogleIDToken, h.config.GoogleClientIDs)
+	if errors.Is(err, ErrGoogleLoginNotConfigured) {
+		log.Printf("Google login attempted but GOOGLE_CLIENT_ID is not configured")
+		response.ServiceUnavailable(c, "Google login is not configured", "GOOGLE_LOGIN_UNAVAILABLE")
+		return
+	}
 	if err != nil {
-		fmt.Printf("Token verification failed: %v\n", err)
+		log.Printf("Google token verification failed: %v", err)
 		response.Unauthorized(c, "Invalid Google token", "INVALID_TOKEN")
+		return
+	}
+
+	// Only trust the email (for account creation and linking) if Google verified it
+	if !googleUser.EmailVerified || googleUser.Email == "" {
+		response.Unauthorized(c, "Google account email is not verified", "EMAIL_NOT_VERIFIED")
 		return
 	}
 
@@ -176,7 +217,7 @@ func (h *Handler) GoogleLogin(c *gin.Context) {
 	// Check if user exists by Google ID
 	user, err := h.repo.GetUserByGoogleID(c.Request.Context(), googleUser.UID)
 	if err != nil {
-		response.BadRequest(c, "Database error", "DATABASE_ERROR")
+		response.InternalServerError(c, "Database error", "DATABASE_ERROR")
 		return
 	}
 
@@ -185,7 +226,7 @@ func (h *Handler) GoogleLogin(c *gin.Context) {
 		// User not found by Google ID. Check if user exists by email to link account.
 		userByEmail, err := h.repo.GetUserByEmail(c.Request.Context(), googleUser.Email)
 		if err != nil {
-			response.BadRequest(c, "Database error", "DATABASE_ERROR")
+			response.InternalServerError(c, "Database error", "DATABASE_ERROR")
 			return
 		}
 
@@ -198,28 +239,16 @@ func (h *Handler) GoogleLogin(c *gin.Context) {
 			}
 			if err := h.repo.UpdateUser(c.Request.Context(), user.ID.Hex(), updates); err != nil {
 				fmt.Printf("Failed to link Google ID: %v\n", err)
-				response.BadRequest(c, "Failed to link account", "DATABASE_ERROR")
+				response.InternalServerError(c, "Failed to link account", "DATABASE_ERROR")
 				return
 			}
 		} else {
 			// Create new user
 			isNewUser = true
-			baseUsername := GenerateUniqueUsername(googleUser.Name)
-			username := baseUsername
-
-			// Ensure unique username
-			counter := 1
-			for {
-				exists, err := h.repo.UsernameExists(c.Request.Context(), username)
-				if err != nil {
-					response.BadRequest(c, "Database error", "DATABASE_ERROR")
-					return
-				}
-				if !exists {
-					break
-				}
-				username = fmt.Sprintf("%s%d", baseUsername, counter)
-				counter++
+			username, err := h.uniqueUsername(c.Request.Context(), GenerateUniqueUsername(googleUser.Name))
+			if err != nil {
+				response.InternalServerError(c, "Database error", "DATABASE_ERROR")
+				return
 			}
 
 			user = &User{
@@ -238,38 +267,15 @@ func (h *Handler) GoogleLogin(c *gin.Context) {
 
 			if err := h.repo.CreateUser(c.Request.Context(), user); err != nil {
 				fmt.Printf("CreateUser failed: %v\n", err)
-				response.BadRequest(c, "Failed to create user", "DATABASE_ERROR")
+				response.InternalServerError(c, "Failed to create user", "DATABASE_ERROR")
 				return
 			}
 		}
 	}
 
-	// Generate Token Pair
-	jwtConfig := h.getJWTConfig()
-	accessToken, refreshToken, err := idToken.GenerateTokenPair(user.ID.Hex(), user.Email, jwtConfig)
-	if err != nil {
-		response.BadRequest(c, "Failed to generate tokens", "AUTH_FAILED")
+	accessToken, refreshToken, ok := h.issueTokens(c, user)
+	if !ok {
 		return
-	}
-
-	// Save Refresh Token
-	claims, _ := idToken.GetTokenClaims(refreshToken)
-	if claims != nil {
-		tokenID := claims.ID // JTI
-		session := &RefreshTokenSession{
-			ID:        primitive.NewObjectID(),
-			UserID:    user.ID,
-			TokenID:   tokenID,
-			ExpiresAt: claims.ExpiresAt.Time,
-			CreatedAt: time.Now(),
-			Revoked:   false,
-			UserAgent: c.Request.UserAgent(),
-			IPAddress: c.ClientIP(),
-		}
-		if err := h.repo.SaveRefreshToken(c.Request.Context(), session); err != nil {
-			// Log error but proceed? Or fail? Better fail for consistency.
-			fmt.Printf("Failed to save refresh token: %v\n", err)
-		}
 	}
 
 	stcode := 200
@@ -296,23 +302,28 @@ func (h *Handler) GoogleLogin(c *gin.Context) {
 // @Failure 403 {object} response.APIResponse
 // @Router /auth/dev-login [post]
 func (h *Handler) DevLogin(c *gin.Context) {
-	// Check if dev mode is enabled
-	if !h.config.DevMode {
-		response.Forbidden(c, "DISABLED", "Dev login is disabled in production")
+	// Dev login is never available in production, even if DEV_MODE is set
+	if !h.config.DevMode || h.config.IsProduction() {
+		response.Forbidden(c, "Dev login is disabled", "DEV_LOGIN_DISABLED")
 		return
 	}
 
 	var req DevLoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "INVALID_REQUEST", "Invalid request format")
+		response.BadRequest(c, "Invalid request format", "INVALID_REQUEST")
 		return
 	}
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 
 	ctx := c.Request.Context()
 
 	// Try to find existing user by email
 	user, err := h.repo.GetUserByEmail(ctx, req.Email)
-	if err != nil || user == nil {
+	if err != nil {
+		response.InternalServerError(c, "Database error", "DATABASE_ERROR")
+		return
+	}
+	if user == nil {
 		// Create new dev user
 		displayName := "Dev User"
 		if req.DisplayName != "" {
@@ -323,7 +334,7 @@ func (h *Handler) DevLogin(c *gin.Context) {
 			ID:                primitive.NewObjectID(),
 			GoogleID:          "dev_" + primitive.NewObjectID().Hex(),
 			Email:             req.Email,
-			Username:          "dev_" + primitive.NewObjectID().Hex()[:8],
+			Username:          "", // set below
 			DisplayName:       displayName,
 			ProfilePictureURL: "",
 			IsVerified:        false,
@@ -334,37 +345,26 @@ func (h *Handler) DevLogin(c *gin.Context) {
 			UpdatedAt:         time.Now(),
 		}
 
+		// "dev_" prefix keeps RequiresUsername=true so the client still runs username setup.
+		// The email's local part plus a uniqueness check avoids collisions between dev users.
+		localPart := strings.SplitN(req.Email, "@", 2)[0]
+		username, err := h.uniqueUsername(ctx, "dev_"+GenerateUniqueUsername(localPart))
+		if err != nil {
+			response.InternalServerError(c, "Database error", "DATABASE_ERROR")
+			return
+		}
+		user.Username = username
+
 		if err := h.repo.CreateUser(ctx, user); err != nil {
-			response.InternalServerError(c, "CREATE_FAILED", "Failed to create user")
+			log.Printf("Dev login CreateUser failed: %v", err)
+			response.InternalServerError(c, "Failed to create user", "CREATE_FAILED")
 			return
 		}
 	}
 
-	// Generate Token Pair
-	jwtConfig := h.getJWTConfig()
-	accessToken, refreshToken, err := idToken.GenerateTokenPair(user.ID.Hex(), user.Email, jwtConfig)
-	if err != nil {
-		response.InternalServerError(c, "TOKEN_FAILED", "Failed to generate tokens")
+	accessToken, refreshToken, ok := h.issueTokens(c, user)
+	if !ok {
 		return
-	}
-
-	// Save Refresh Token
-	claims, _ := idToken.GetTokenClaims(refreshToken)
-	if claims != nil {
-		tokenID := claims.ID // JTI
-		session := &RefreshTokenSession{
-			ID:        primitive.NewObjectID(),
-			UserID:    user.ID,
-			TokenID:   tokenID,
-			ExpiresAt: claims.ExpiresAt.Time,
-			CreatedAt: time.Now(),
-			Revoked:   false,
-			UserAgent: c.Request.UserAgent(),
-			IPAddress: c.ClientIP(),
-		}
-		if err := h.repo.SaveRefreshToken(c.Request.Context(), session); err != nil {
-			fmt.Printf("Failed to save refresh token: %v\n", err)
-		}
 	}
 
 	// Determine if username setup is needed
@@ -397,33 +397,21 @@ func (h *Handler) RefreshToken(c *gin.Context) {
 		return
 	}
 
-	// Validate Token Signature
-	claims, err := idToken.ValidateToken(req.RefreshToken, h.config.JWTSecret)
+	// Must be a validly signed, unexpired *refresh* token with a token ID
+	claims, err := idToken.ValidateRefreshToken(req.RefreshToken, h.config.JWTSecret)
 	if err != nil {
 		response.Unauthorized(c, "Invalid refresh token", "INVALID_TOKEN")
 		return
 	}
 
-	// Check if token exists in DB and is not revoked
-	// Note: We need JTI (Token ID) for this. pkg/jwt needs to ensure JTI is set.
-	// Standard claims usually have ID. Let's assume GenerateTokenPair adds it.
-	// If not, we might need to rely on just claims, but we should verify DB.
-	if claims.ID == "" {
-		// Fallback: If no JTI, we can't strict verify. But we should enforce JTI usage.
-		// For now, let's assume JTI is present.
-	}
-
+	// The session must still exist (logout / revoke-all / account deletion remove it)
 	session, err := h.repo.GetRefreshToken(c.Request.Context(), claims.ID)
 	if err != nil {
-		response.Unauthorized(c, "Token lookup failed", "INVALID_TOKEN")
+		response.InternalServerError(c, "Token lookup failed", "DATABASE_ERROR")
 		return
 	}
-	if session == nil {
+	if session == nil || session.Revoked || session.UserID.Hex() != claims.UserID {
 		response.Unauthorized(c, "Token revoked or not found", "TOKEN_REVOKED")
-		return
-	}
-	if session.Revoked {
-		response.Unauthorized(c, "Token has been revoked", "TOKEN_REVOKED")
 		return
 	}
 
@@ -462,15 +450,16 @@ func (h *Handler) Logout(c *gin.Context) {
 		return
 	}
 
-	// We don't necessarily need to validate signature to revoke it, but it's safer.
-	claims, err := idToken.GetTokenClaims(req.RefreshToken)
+	claims, err := idToken.ValidateRefreshToken(req.RefreshToken, h.config.JWTSecret)
 	if err != nil {
-		response.BadRequest(c, "Invalid token format", "INVALID_TOKEN")
+		// Expired or malformed tokens have nothing left to revoke; logging out is still "successful"
+		response.Success(c, "Logged out successfully")
 		return
 	}
 
-	if claims.ID != "" {
-		_ = h.repo.RevokeRefreshToken(c.Request.Context(), claims.ID)
+	if err := h.repo.RevokeRefreshToken(c.Request.Context(), claims.ID); err != nil {
+		response.InternalServerError(c, "Failed to log out", "DATABASE_ERROR")
+		return
 	}
 
 	response.Success(c, "Logged out successfully")
@@ -493,7 +482,7 @@ func (h *Handler) RevokeAllTokens(c *gin.Context) {
 	}
 	user, ok := val.(*User)
 	if !ok {
-		response.BadRequest(c, "User context error", "INTERNAL_ERROR")
+		response.InternalServerError(c, "User context error", "INTERNAL_ERROR")
 		return
 	}
 
@@ -523,7 +512,7 @@ func (h *Handler) GetOwnProfile(c *gin.Context) {
 
 	user, ok := val.(*User)
 	if !ok {
-		response.BadRequest(c, "User context error", "INTERNAL_ERROR")
+		response.InternalServerError(c, "User context error", "INTERNAL_ERROR")
 		return
 	}
 
@@ -637,7 +626,7 @@ func (h *Handler) UpdateProfile(c *gin.Context) {
 	}
 	user, ok := val.(*User)
 	if !ok {
-		response.BadRequest(c, "User context error", "INTERNAL_ERROR")
+		response.InternalServerError(c, "User context error", "INTERNAL_ERROR")
 		return
 	}
 
@@ -658,14 +647,14 @@ func (h *Handler) UpdateProfile(c *gin.Context) {
 	}
 
 	if err := h.repo.UpdateUser(c.Request.Context(), user.ID.Hex(), updates); err != nil {
-		response.BadRequest(c, "Failed to update profile", "DATABASE_ERROR")
+		response.InternalServerError(c, "Failed to update profile", "DATABASE_ERROR")
 		return
 	}
 
 	// Fetch updated user
 	updatedUser, err := h.repo.GetUserByID(c.Request.Context(), user.ID.Hex())
 	if err != nil {
-		response.BadRequest(c, "Failed to fetch updated user", "DATABASE_ERROR")
+		response.InternalServerError(c, "Failed to fetch updated user", "DATABASE_ERROR")
 		return
 	}
 
@@ -716,7 +705,7 @@ func (h *Handler) UpdateUsername(c *gin.Context) {
 	}
 	user, ok := val.(*User)
 	if !ok {
-		response.BadRequest(c, "User context error", "INTERNAL_ERROR")
+		response.InternalServerError(c, "User context error", "INTERNAL_ERROR")
 		return
 	}
 
@@ -733,11 +722,11 @@ func (h *Handler) UpdateUsername(c *gin.Context) {
 
 	usernameExists, err := h.repo.UsernameExists(c.Request.Context(), req.Username)
 	if err != nil {
-		response.BadRequest(c, "Database error", "DATABASE_ERROR")
+		response.InternalServerError(c, "Database error", "DATABASE_ERROR")
 		return
 	}
 	if usernameExists {
-		response.BadRequest(c, "Username already taken", "USERNAME_TAKEN")
+		response.Conflict(c, "Username already taken", "USERNAME_TAKEN")
 		return
 	}
 
@@ -748,14 +737,19 @@ func (h *Handler) UpdateUsername(c *gin.Context) {
 	}
 
 	if err := h.repo.UpdateUser(c.Request.Context(), user.ID.Hex(), updates); err != nil {
-		response.BadRequest(c, "Failed to update username", "DATABASE_ERROR")
+		// Two users racing for the same name: the unique index rejects the second one
+		if mongo.IsDuplicateKeyError(err) {
+			response.Conflict(c, "Username already taken", "USERNAME_TAKEN")
+			return
+		}
+		response.InternalServerError(c, "Failed to update username", "DATABASE_ERROR")
 		return
 	}
 
 	// Fetch updated user
 	updatedUser, err := h.repo.GetUserByID(c.Request.Context(), user.ID.Hex())
 	if err != nil {
-		response.BadRequest(c, "Failed to fetch updated user", "DATABASE_ERROR")
+		response.InternalServerError(c, "Failed to fetch updated user", "DATABASE_ERROR")
 		return
 	}
 
@@ -783,13 +777,26 @@ func (h *Handler) UploadProfilePicture(c *gin.Context) {
 	}
 	user, ok := val.(*User)
 	if !ok {
-		response.BadRequest(c, "User context error", "INTERNAL_ERROR")
+		response.InternalServerError(c, "User context error", "INTERNAL_ERROR")
 		return
 	}
+
+	if h.cloudinary == nil {
+		response.ServiceUnavailable(c, "Image uploads are not configured", "UPLOADS_UNAVAILABLE")
+		return
+	}
+
+	// Reject oversized bodies before parsing them (images are at most 10MB)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 12<<20)
 
 	// Get file
 	file, err := c.FormFile("file")
 	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			response.Error(c, http.StatusRequestEntityTooLarge, "File is too large", "FILE_TOO_LARGE")
+			return
+		}
 		response.BadRequest(c, "File is required", "MISSING_FILE")
 		return
 	}
@@ -808,11 +815,6 @@ func (h *Handler) UploadProfilePicture(c *gin.Context) {
 	}
 	defer fileContent.Close()
 
-	// Delete old picture if exists
-	if user.ProfilePicturePublicID != "" {
-		_ = h.cloudinary.Delete(c.Request.Context(), user.ProfilePicturePublicID, "image")
-	}
-
 	// Upload new picture
 	uploadResult, err := h.cloudinary.UploadImage(c.Request.Context(), fileContent, file.Filename)
 	if err != nil {
@@ -827,8 +829,15 @@ func (h *Handler) UploadProfilePicture(c *gin.Context) {
 	}
 
 	if err := h.repo.UpdateUser(c.Request.Context(), user.ID.Hex(), updates); err != nil {
-		response.BadRequest(c, "Failed to update user profile", "DATABASE_ERROR")
+		// Don't leave the just-uploaded image orphaned
+		h.deleteAsset(c.Request.Context(), uploadResult.PublicID)
+		response.InternalServerError(c, "Failed to update user profile", "DATABASE_ERROR")
 		return
+	}
+
+	// Only now that the profile points at the new image is the old one removed
+	if user.ProfilePicturePublicID != "" {
+		h.deleteAsset(c.Request.Context(), user.ProfilePicturePublicID)
 	}
 
 	response.Success(c, ProfilePictureResponse{
@@ -857,13 +866,26 @@ func (h *Handler) UploadCoverImage(c *gin.Context) {
 	}
 	user, ok := val.(*User)
 	if !ok {
-		response.BadRequest(c, "User context error", "INTERNAL_ERROR")
+		response.InternalServerError(c, "User context error", "INTERNAL_ERROR")
 		return
 	}
+
+	if h.cloudinary == nil {
+		response.ServiceUnavailable(c, "Image uploads are not configured", "UPLOADS_UNAVAILABLE")
+		return
+	}
+
+	// Reject oversized bodies before parsing them (images are at most 10MB)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 12<<20)
 
 	// Get file
 	file, err := c.FormFile("file")
 	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			response.Error(c, http.StatusRequestEntityTooLarge, "File is too large", "FILE_TOO_LARGE")
+			return
+		}
 		response.BadRequest(c, "File is required", "MISSING_FILE")
 		return
 	}
@@ -882,11 +904,6 @@ func (h *Handler) UploadCoverImage(c *gin.Context) {
 	}
 	defer fileContent.Close()
 
-	// Delete old cover if exists
-	if user.CoverImagePublicID != "" {
-		_ = h.cloudinary.Delete(c.Request.Context(), user.CoverImagePublicID, "image")
-	}
-
 	// Upload new cover
 	uploadResult, err := h.cloudinary.UploadImage(c.Request.Context(), fileContent, file.Filename)
 	if err != nil {
@@ -901,8 +918,15 @@ func (h *Handler) UploadCoverImage(c *gin.Context) {
 	}
 
 	if err := h.repo.UpdateUser(c.Request.Context(), user.ID.Hex(), updates); err != nil {
-		response.BadRequest(c, "Failed to update user profile", "DATABASE_ERROR")
+		// Don't leave the just-uploaded image orphaned
+		h.deleteAsset(c.Request.Context(), uploadResult.PublicID)
+		response.InternalServerError(c, "Failed to update user profile", "DATABASE_ERROR")
 		return
+	}
+
+	// Only now that the profile points at the new image is the old one removed
+	if user.CoverImagePublicID != "" {
+		h.deleteAsset(c.Request.Context(), user.CoverImagePublicID)
 	}
 
 	response.Success(c, CoverImageResponse{
@@ -927,12 +951,12 @@ func (h *Handler) RemoveProfilePicture(c *gin.Context) {
 	}
 	user, ok := val.(*User)
 	if !ok {
-		response.BadRequest(c, "User context error", "INTERNAL_ERROR")
+		response.InternalServerError(c, "User context error", "INTERNAL_ERROR")
 		return
 	}
 
 	if user.ProfilePicturePublicID != "" {
-		_ = h.cloudinary.Delete(c.Request.Context(), user.ProfilePicturePublicID, "image")
+		h.deleteAsset(c.Request.Context(), user.ProfilePicturePublicID)
 	}
 
 	updates := map[string]interface{}{
@@ -941,7 +965,7 @@ func (h *Handler) RemoveProfilePicture(c *gin.Context) {
 	}
 
 	if err := h.repo.UpdateUser(c.Request.Context(), user.ID.Hex(), updates); err != nil {
-		response.BadRequest(c, "Failed to update user profile", "DATABASE_ERROR")
+		response.InternalServerError(c, "Failed to update user profile", "DATABASE_ERROR")
 		return
 	}
 
@@ -965,12 +989,12 @@ func (h *Handler) RemoveCoverImage(c *gin.Context) {
 	}
 	user, ok := val.(*User)
 	if !ok {
-		response.BadRequest(c, "User context error", "INTERNAL_ERROR")
+		response.InternalServerError(c, "User context error", "INTERNAL_ERROR")
 		return
 	}
 
 	if user.CoverImagePublicID != "" {
-		_ = h.cloudinary.Delete(c.Request.Context(), user.CoverImagePublicID, "image")
+		h.deleteAsset(c.Request.Context(), user.CoverImagePublicID)
 	}
 
 	updates := map[string]interface{}{
@@ -979,7 +1003,7 @@ func (h *Handler) RemoveCoverImage(c *gin.Context) {
 	}
 
 	if err := h.repo.UpdateUser(c.Request.Context(), user.ID.Hex(), updates); err != nil {
-		response.BadRequest(c, "Failed to update user profile", "DATABASE_ERROR")
+		response.InternalServerError(c, "Failed to update user profile", "DATABASE_ERROR")
 		return
 	}
 
@@ -1004,7 +1028,7 @@ func (h *Handler) GetMe(c *gin.Context) {
 
 	user, ok := val.(*User)
 	if !ok {
-		response.BadRequest(c, "User context error", "INTERNAL_ERROR")
+		response.InternalServerError(c, "User context error", "INTERNAL_ERROR")
 		return
 	}
 
@@ -1059,7 +1083,7 @@ func (h *Handler) GetPinnedAnchors(c *gin.Context) {
 	}
 
 	// Convert to response
-	var pinnedAnchors []PinnedAnchorResponse
+	pinnedAnchors := []PinnedAnchorResponse{} // [] rather than null when nothing is pinned
 	for _, a := range anchorsList {
 		pinnedAnchors = append(pinnedAnchors, PinnedAnchorResponse{
 			ID:              a.ID,
@@ -1096,7 +1120,7 @@ func (h *Handler) DeleteAccount(c *gin.Context) {
 	}
 	user, ok := val.(*User)
 	if !ok {
-		response.BadRequest(c, "User context error", "INTERNAL_ERROR")
+		response.InternalServerError(c, "User context error", "INTERNAL_ERROR")
 		return
 	}
 
@@ -1111,10 +1135,10 @@ func (h *Handler) DeleteAccount(c *gin.Context) {
 
 	// 2. Delete Profile Picture and Cover Image from Cloudinary
 	if user.ProfilePicturePublicID != "" {
-		_ = h.cloudinary.Delete(c.Request.Context(), user.ProfilePicturePublicID, "image")
+		h.deleteAsset(c.Request.Context(), user.ProfilePicturePublicID)
 	}
 	if user.CoverImagePublicID != "" {
-		_ = h.cloudinary.Delete(c.Request.Context(), user.CoverImagePublicID, "image")
+		h.deleteAsset(c.Request.Context(), user.CoverImagePublicID)
 	}
 
 	// 3. Delete User from DB
@@ -1124,4 +1148,14 @@ func (h *Handler) DeleteAccount(c *gin.Context) {
 	}
 
 	response.Success(c, "Account deleted successfully")
+}
+
+// deleteAsset removes an image from Cloudinary (best effort; no-op when Cloudinary isn't configured)
+func (h *Handler) deleteAsset(ctx context.Context, publicID string) {
+	if h.cloudinary == nil || publicID == "" {
+		return
+	}
+	if err := h.cloudinary.Delete(ctx, publicID, "image"); err != nil {
+		log.Printf("Failed to delete Cloudinary asset %s: %v", publicID, err)
+	}
 }

@@ -1,22 +1,18 @@
-# Open your .gitignore file in a text editor
-nano .gitignore
+# Secrets — never commit these
+.env
+.env.*
+!.env.example
+internal/config/serviceAccountKey.json
+*serviceAccount*.json
 
-# Or use VS Code
-code .gitignore
-
-# Or just view it
-cat .gitignore
-```
-
-Then **add these lines** to the file:
-```
-# Compiled binaries
-api
-api.exe
+# Build output
+/bin/
+/tmp/
+/api
+/cmd/api/api
 *.exe
-cmd/api/api
 
-# Secrets (optional - if you don't want to commit secrets)
-internal/config/serviceAccountKey.jsoninternal/config/serviceAccountKey.json
-api
+# OS / editor
 .DS_Store
+.idea/
+.vscode/

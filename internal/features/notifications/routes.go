@@ -27,6 +27,8 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Con
 		notifications.GET("/unread-count", handler.GetUnreadCount)
 		notifications.PATCH("/:id/read", handler.MarkAsRead)
 		notifications.PATCH("/read-all", handler.MarkAllAsRead)
+		notifications.DELETE("/:id", handler.DeleteNotification)
+		notifications.DELETE("", handler.ClearNotifications)
 	}
 }
 

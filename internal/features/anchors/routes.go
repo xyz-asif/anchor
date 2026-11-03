@@ -54,6 +54,7 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Con
 			// Item routes
 			protected.POST("/:id/items", handler.AddItem)
 			protected.POST("/:id/items/upload", handler.UploadItem)
+			protected.PATCH("/:id/items/:itemId", handler.UpdateItem)
 			protected.DELETE("/:id/items/:itemId", handler.DeleteItem)
 			protected.PATCH("/:id/items/reorder", handler.ReorderItems)
 		}

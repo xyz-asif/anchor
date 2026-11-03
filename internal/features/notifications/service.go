@@ -96,6 +96,42 @@ func (s *Service) CreateCommentNotifications(ctx context.Context, comment *Comme
 	return nil
 }
 
+// CreateReplyNotifications notifies on a reply to a comment:
+//   - mentioned users get a "mention"
+//   - the parent comment's author gets a "reply"
+//   - the anchor owner gets a "comment" (unless they are already notified above)
+func (s *Service) CreateReplyNotifications(ctx context.Context, reply *CommentData, parentAuthorID, anchorUserID primitive.ObjectID, actor *auth.User) error {
+	var out []Notification
+	notified := map[primitive.ObjectID]bool{actor.ID: true} // never notify yourself
+
+	add := func(recipient primitive.ObjectID, typ, resourceType string, resourceID primitive.ObjectID) {
+		if notified[recipient] || s.isBlocked(ctx, recipient, actor.ID) {
+			return
+		}
+		notified[recipient] = true
+		out = append(out, Notification{
+			RecipientID:  recipient,
+			ActorID:      actor.ID,
+			Type:         typ,
+			ResourceType: resourceType,
+			ResourceID:   resourceID,
+			AnchorID:     &reply.AnchorID,
+			Preview:      truncate(reply.Content, 100),
+		})
+	}
+
+	for _, mentioned := range reply.Mentions {
+		add(mentioned, TypeMention, "comment", reply.ID)
+	}
+	add(parentAuthorID, TypeReply, "comment", reply.ID)
+	add(anchorUserID, TypeComment, "anchor", reply.AnchorID)
+
+	if len(out) == 0 {
+		return nil
+	}
+	return s.repo.CreateMany(ctx, out)
+}
+
 // CreateEditCommentNotifications creates notifications for NEW mentions in edited comment
 func (s *Service) CreateEditCommentNotifications(ctx context.Context, comment *CommentData, oldMentions []primitive.ObjectID, actor *auth.User) error {
 	// Find new mentions (in current but not in old)
@@ -148,10 +184,12 @@ func (s *Service) CreateEditCommentNotifications(ctx context.Context, comment *C
 // Helper functions
 
 func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	// Count characters, not bytes, so multi-byte characters are never cut in half
+	r := []rune(s)
+	if len(r) <= maxLen {
 		return s
 	}
-	return s[:maxLen-3] + "..."
+	return string(r[:maxLen-3]) + "..."
 }
 
 func containsID(ids []primitive.ObjectID, id primitive.ObjectID) bool {
@@ -173,6 +211,12 @@ func (s *Service) CreateLikeNotification(ctx context.Context, anchorID primitive
 	// Check if Owner has blocked Actor
 	if s.isBlocked(ctx, ownerID, actorID) {
 		return nil
+	}
+
+	// One notification per actor+target: toggling like/unlike or follow/unfollow repeatedly
+	// must not spam the recipient
+	if exists, err := s.repo.Exists(ctx, ownerID, actorID, TypeLike, anchorID); err != nil || exists {
+		return err
 	}
 
 	notification := Notification{
@@ -198,6 +242,12 @@ func (s *Service) CreateFollowNotification(ctx context.Context, actorID, targetU
 	// Check if Target (Recipient) has blocked Actor
 	if s.isBlocked(ctx, targetUserID, actorID) {
 		return nil
+	}
+
+	// One notification per actor+target: toggling like/unlike or follow/unfollow repeatedly
+	// must not spam the recipient
+	if exists, err := s.repo.Exists(ctx, targetUserID, actorID, TypeFollow, actorID); err != nil || exists {
+		return err
 	}
 
 	notification := Notification{
@@ -238,17 +288,14 @@ func (s *Service) CreateCloneNotification(ctx context.Context, clonedAnchorID, o
 	return s.repo.CreateNotification(ctx, &notification)
 }
 
+// isBlocked reports whether the recipient has blocked or muted the actor; either way the
+// recipient should not get notifications about the actor's activity.
 func (s *Service) isBlocked(ctx context.Context, recipientID, actorID primitive.ObjectID) bool {
 	user, err := s.authRepo.GetUserByObjectID(ctx, recipientID)
 	if err != nil || user == nil {
 		return false // Default to not blocked if error
 	}
-	for _, id := range user.BlockedUsers {
-		if id == actorID {
-			return true
-		}
-	}
-	return false
+	return user.HasBlocked(actorID) || user.HasMuted(actorID)
 }
 
 // CreateAnchorUpdateNotifications notifies followers about anchor updates
@@ -272,8 +319,8 @@ func (s *Service) CreateAnchorUpdateNotifications(ctx context.Context, anchorID 
 	notificationsList := make([]Notification, 0)
 
 	for _, followerID := range followerIDs {
-		// Don't notify the author
-		if followerID == authorID {
+		// Don't notify the author, or followers who blocked or muted the author
+		if followerID == authorID || s.isBlocked(ctx, followerID, authorID) {
 			continue
 		}
 
@@ -301,8 +348,10 @@ func (s *Service) CreateAnchorUpdateNotifications(ctx context.Context, anchorID 
 
 // Helper function
 func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	// Count characters, not bytes, so multi-byte characters are never cut in half
+	r := []rune(s)
+	if len(r) <= maxLen {
 		return s
 	}
-	return s[:maxLen-3] + "..."
+	return string(r[:maxLen-3]) + "..."
 }

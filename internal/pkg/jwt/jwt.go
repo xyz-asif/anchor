@@ -1,18 +1,33 @@
 package jwt
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// Token types stored in the "typ" claim
+const (
+	TokenTypeAccess  = "access"
+	TokenTypeRefresh = "refresh"
+)
+
+// ErrWrongTokenType is returned when e.g. a refresh token is presented where an access token is expected
+var ErrWrongTokenType = errors.New("wrong token type")
+
 // Claims represents JWT claims
 type Claims struct {
-	UserID   string                 `json:"userId"`
-	Email    string                 `json:"email"`
-	Role     string                 `json:"role,omitempty"`
-	Metadata map[string]interface{} `json:"metadata,omitempty"`
+	UserID string `json:"userId"`
+	Email  string `json:"email"`
+	Type   string `json:"typ,omitempty"` // "access" or "refresh"
+	// IssuedAtMs is the issue time in milliseconds. The standard "iat" claim only has second
+	// precision, which isn't enough to tell whether a token predates a revoke-all.
+	IssuedAtMs int64                  `json:"iat_ms,omitempty"`
+	Role       string                 `json:"role,omitempty"`
+	Metadata   map[string]interface{} `json:"metadata,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -46,9 +61,12 @@ func GenerateToken(userID, email string, cfg *Config) (string, error) {
 
 	now := time.Now()
 	claims := &Claims{
-		UserID: userID,
-		Email:  email,
+		UserID:     userID,
+		Email:      email,
+		Type:       TokenTypeAccess,
+		IssuedAtMs: now.UnixMilli(),
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        newTokenID(),
 			ExpiresAt: jwt.NewNumericDate(now.Add(cfg.AccessExpiry)),
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now),
@@ -70,10 +88,13 @@ func GenerateTokenWithRole(userID, email, role string, cfg *Config) (string, err
 
 	now := time.Now()
 	claims := &Claims{
-		UserID: userID,
-		Email:  email,
-		Role:   role,
+		UserID:     userID,
+		Email:      email,
+		Role:       role,
+		Type:       TokenTypeAccess,
+		IssuedAtMs: now.UnixMilli(),
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        newTokenID(),
 			ExpiresAt: jwt.NewNumericDate(now.Add(cfg.AccessExpiry)),
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now),
@@ -95,10 +116,13 @@ func GenerateTokenWithMetadata(userID, email string, metadata map[string]interfa
 
 	now := time.Now()
 	claims := &Claims{
-		UserID:   userID,
-		Email:    email,
-		Metadata: metadata,
+		UserID:     userID,
+		Email:      email,
+		Metadata:   metadata,
+		Type:       TokenTypeAccess,
+		IssuedAtMs: now.UnixMilli(),
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        newTokenID(),
 			ExpiresAt: jwt.NewNumericDate(now.Add(cfg.AccessExpiry)),
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now),
@@ -120,9 +144,12 @@ func GenerateRefreshToken(userID, email string, cfg *Config) (string, error) {
 
 	now := time.Now()
 	claims := &Claims{
-		UserID: userID,
-		Email:  email,
+		UserID:     userID,
+		Email:      email,
+		Type:       TokenTypeRefresh,
+		IssuedAtMs: now.UnixMilli(),
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        newTokenID(),
 			ExpiresAt: jwt.NewNumericDate(now.Add(cfg.RefreshExpiry)),
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now),
@@ -159,7 +186,7 @@ func ValidateToken(tokenString string, secret string) (*Claims, error) {
 
 // RefreshToken refreshes an existing token
 func RefreshToken(tokenString, secret string, cfg *Config) (string, error) {
-	claims, err := ValidateToken(tokenString, secret)
+	claims, err := ValidateRefreshToken(tokenString, secret)
 	if err != nil {
 		return "", err
 	}
@@ -231,4 +258,49 @@ func ValidateTokenWithRole(tokenString, secret, requiredRole string) (*Claims, e
 	}
 
 	return claims, nil
+}
+
+// newTokenID returns a random, URL-safe unique token ID (used as the JWT "jti" claim)
+func newTokenID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand never fails on supported platforms; fall back to time-based uniqueness
+		return hex.EncodeToString([]byte(time.Now().Format(time.RFC3339Nano)))
+	}
+	return hex.EncodeToString(b)
+}
+
+// ValidateAccessToken validates a token and ensures it is an access token
+func ValidateAccessToken(tokenString, secret string) (*Claims, error) {
+	claims, err := ValidateToken(tokenString, secret)
+	if err != nil {
+		return nil, err
+	}
+	if claims.Type != TokenTypeAccess {
+		return nil, ErrWrongTokenType
+	}
+	return claims, nil
+}
+
+// ValidateRefreshToken validates a token and ensures it is a refresh token with a token ID
+func ValidateRefreshToken(tokenString, secret string) (*Claims, error) {
+	claims, err := ValidateToken(tokenString, secret)
+	if err != nil {
+		return nil, err
+	}
+	if claims.Type != TokenTypeRefresh || claims.ID == "" {
+		return nil, ErrWrongTokenType
+	}
+	return claims, nil
+}
+
+// IssuedTime returns when the token was issued, with millisecond precision when available
+func (c *Claims) IssuedTime() time.Time {
+	if c.IssuedAtMs > 0 {
+		return time.UnixMilli(c.IssuedAtMs)
+	}
+	if c.IssuedAt != nil {
+		return c.IssuedAt.Time
+	}
+	return time.Time{}
 }

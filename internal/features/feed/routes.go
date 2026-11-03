@@ -41,6 +41,6 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Con
 		feed.GET("/discover", optionalAuth, handler.GetDiscoverFeed)
 
 		// Tag feed - optional auth (or no auth, as per instruction's example)
-		feed.GET("/tags/:tagName", handler.GetTagFeed)
+		feed.GET("/tags/:tagName", optionalAuth, handler.GetTagFeed)
 	}
 }
