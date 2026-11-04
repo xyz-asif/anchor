@@ -25,9 +25,12 @@ type Claims struct {
 	Type   string `json:"typ,omitempty"` // "access" or "refresh"
 	// IssuedAtMs is the issue time in milliseconds. The standard "iat" claim only has second
 	// precision, which isn't enough to tell whether a token predates a revoke-all.
-	IssuedAtMs int64                  `json:"iat_ms,omitempty"`
-	Role       string                 `json:"role,omitempty"`
-	Metadata   map[string]interface{} `json:"metadata,omitempty"`
+	IssuedAtMs int64 `json:"iat_ms,omitempty"`
+	// SessionID ties an access token to the refresh session (its JTI) it was issued with,
+	// so ending that session (logout) also ends the access token.
+	SessionID string                 `json:"sid,omitempty"`
+	Role      string                 `json:"role,omitempty"`
+	Metadata  map[string]interface{} `json:"metadata,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -65,6 +68,37 @@ func GenerateToken(userID, email string, cfg *Config) (string, error) {
 		Email:      email,
 		Type:       TokenTypeAccess,
 		IssuedAtMs: now.UnixMilli(),
+		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        newTokenID(),
+			ExpiresAt: jwt.NewNumericDate(now.Add(cfg.AccessExpiry)),
+			IssuedAt:  jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now),
+			Issuer:    cfg.Issuer,
+			Audience:  []string{cfg.Audience},
+			Subject:   userID,
+		},
+	}
+
+	token := jwt.NewWithClaims(cfg.SigningMethod, claims)
+	return token.SignedString([]byte(cfg.Secret))
+}
+
+// GenerateSessionAccessToken generates an access token bound to a refresh session (sessionID = refresh token JTI)
+func GenerateSessionAccessToken(userID, email, sessionID string, cfg *Config) (string, error) {
+	if cfg == nil {
+		return "", errors.New("JWT config is required")
+	}
+	if sessionID == "" {
+		return "", errors.New("session ID is required")
+	}
+
+	now := time.Now()
+	claims := &Claims{
+		UserID:     userID,
+		Email:      email,
+		Type:       TokenTypeAccess,
+		IssuedAtMs: now.UnixMilli(),
+		SessionID:  sessionID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:        newTokenID(),
 			ExpiresAt: jwt.NewNumericDate(now.Add(cfg.AccessExpiry)),
@@ -170,7 +204,7 @@ func ValidateToken(tokenString string, secret string) (*Claims, error) {
 			return nil, errors.New("unexpected signing method")
 		}
 		return []byte(secret), nil
-	})
+	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
 
 	if err != nil {
 		return nil, err

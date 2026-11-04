@@ -127,6 +127,9 @@ func (r *Repository) GetUserClonedAnchors(
 	userID primitive.ObjectID,
 	anchorIDs []primitive.ObjectID,
 ) (map[primitive.ObjectID]bool, error) {
+	if len(anchorIDs) == 0 {
+		return map[primitive.ObjectID]bool{}, nil
+	}
 	filter := bson.M{
 		"userId":             userID,
 		"clonedFromAnchorId": bson.M{"$in": anchorIDs},
@@ -139,16 +142,16 @@ func (r *Repository) GetUserClonedAnchors(
 	}
 	defer cursor.Close(ctx)
 
-	clonedMap := make(map[primitive.ObjectID]bool)
-	for cursor.Next(ctx) {
-		var result struct {
-			ClonedFromAnchorID primitive.ObjectID `bson:"clonedFromAnchorId"`
-		}
-		if err := cursor.Decode(&result); err == nil {
-			clonedMap[result.ClonedFromAnchorID] = true
-		}
+	var results []struct {
+		ClonedFromAnchorID primitive.ObjectID `bson:"clonedFromAnchorId"`
 	}
-
+	if err := cursor.All(ctx, &results); err != nil {
+		return nil, err
+	}
+	clonedMap := make(map[primitive.ObjectID]bool, len(results))
+	for _, result := range results {
+		clonedMap[result.ClonedFromAnchorID] = true
+	}
 	return clonedMap, nil
 }
 
@@ -301,12 +304,21 @@ func (r *Repository) GetPreviewItemsForAnchors(
 	return result, nil
 }
 
-// AnyPublicAnchorWithTags reports whether at least one public, non-deleted anchor has any of the tags
-func (r *Repository) AnyPublicAnchorWithTags(ctx context.Context, tagList []string) (bool, error) {
-	n, err := r.anchorsCollection.CountDocuments(ctx, bson.M{
+// AnyDiscoverableAnchorWithTags reports whether the discover feed would show at least one anchor
+// with any of the tags, i.e. a public, non-deleted anchor that isn't by an excluded user or
+// hidden by the viewer
+func (r *Repository) AnyDiscoverableAnchorWithTags(ctx context.Context, tagList []string, excludeUserIDs, hiddenAnchorIDs []primitive.ObjectID) (bool, error) {
+	filter := bson.M{
 		"visibility": "public",
 		"deletedAt":  nil,
 		"tags":       bson.M{"$in": tagList},
-	}, options.Count().SetLimit(1))
+	}
+	if len(excludeUserIDs) > 0 {
+		filter["userId"] = bson.M{"$nin": excludeUserIDs}
+	}
+	if len(hiddenAnchorIDs) > 0 {
+		filter["_id"] = bson.M{"$nin": hiddenAnchorIDs}
+	}
+	n, err := r.anchorsCollection.CountDocuments(ctx, filter, options.Count().SetLimit(1))
 	return n > 0, err
 }

@@ -15,9 +15,9 @@ const (
 
 // FeedQuery represents the query parameters for filtering the feed
 type FeedQuery struct {
-	Limit      int    `form:"limit"`
-	Cursor     string `form:"cursor"`
-	IncludeOwn *bool  `form:"includeOwn"` // Pointer to distinguish between false and missing
+	Limit      int
+	Cursor     *FeedCursor // nil = first page
+	IncludeOwn bool
 }
 
 // FeedCursor represents the decoded cursor data
@@ -116,14 +116,14 @@ type FeedResponse struct {
 
 // DiscoverQuery for GET /feed/discover
 type DiscoverQuery struct {
-	Limit    int    `form:"limit"`
-	Cursor   string `form:"cursor"`
-	Category string `form:"category"`
-	Tag      string `form:"tag"`
+	Limit    int
+	Cursor   *DiscoverCursor // nil = first page
+	Category string
+	Tag      string
 
 	// IncludeFollowed keeps anchors from people you follow (used by the tag feed).
 	// Set by handlers only, never from the query string.
-	IncludeFollowed bool `form:"-"`
+	IncludeFollowed bool
 }
 
 // DiscoverCursor for pagination (includes score for trending/popular)

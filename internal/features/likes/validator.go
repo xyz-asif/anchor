@@ -2,27 +2,51 @@ package likes
 
 import (
 	"errors"
+	"fmt"
+	"strconv"
+	"strings"
 )
 
-// ValidateLikeActionRequest validates the like action request
+const (
+	defaultListLimit = 20
+	maxListLimit     = 50
+	maxListPage      = 10000
+)
+
+// ValidateLikeActionRequest validates the like action request (any letter case is accepted)
 func ValidateLikeActionRequest(req *LikeActionRequest) error {
-	if req.Action != "like" && req.Action != "unlike" {
-		return errors.New("action must be 'like' or 'unlike'")
+	req.Action = strings.ToLower(strings.TrimSpace(req.Action))
+	switch req.Action {
+	case "like", "unlike":
+		return nil
+	case "":
+		return errors.New(`Please say what to do: send {"action": "like"} or {"action": "unlike"}`)
 	}
-	return nil
+	return fmt.Errorf(`"%s" isn't a valid action. Use "like" or "unlike"`, req.Action)
 }
 
-// ValidateLikeListQuery validates the like list query parameters
-func ValidateLikeListQuery(query *LikeListQuery) error {
-	if query.Page < 1 {
-		query.Page = 1
+// ParseLikeListQuery reads ?page= and ?limit=, explaining exactly what's wrong with bad values
+func ParseLikeListQuery(pageStr, limitStr string) (*LikeListQuery, error) {
+	q := &LikeListQuery{Page: 1, Limit: defaultListLimit}
+	if pageStr != "" {
+		page, err := strconv.Atoi(pageStr)
+		if err != nil || page < 1 {
+			return nil, fmt.Errorf(`Page must be a whole number of 1 or more (got "%s")`, pageStr)
+		}
+		if page > maxListPage {
+			return nil, fmt.Errorf("Page can't be higher than %d", maxListPage)
+		}
+		q.Page = page
 	}
-
-	if query.Limit < 1 {
-		query.Limit = 20
-	} else if query.Limit > 50 {
-		query.Limit = 50
+	if limitStr != "" {
+		limit, err := strconv.Atoi(limitStr)
+		if err != nil || limit < 1 {
+			return nil, fmt.Errorf(`Limit must be a whole number between 1 and %d (got "%s")`, maxListLimit, limitStr)
+		}
+		if limit > maxListLimit {
+			limit = maxListLimit
+		}
+		q.Limit = limit
 	}
-
-	return nil
+	return q, nil
 }

@@ -2,12 +2,14 @@ package follows
 
 import (
 	"context"
+	"errors"
+	"log"
 	"math"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xyz-asif/gotodo/internal/config"
 	"github.com/xyz-asif/gotodo/internal/features/auth"
-	"github.com/xyz-asif/gotodo/internal/features/notifications" // Already present, but good to confirm
+	"github.com/xyz-asif/gotodo/internal/features/notifications"
 	"github.com/xyz-asif/gotodo/internal/pkg/response"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -16,18 +18,63 @@ import (
 type Handler struct {
 	repo                *Repository
 	authRepo            *auth.Repository
-	notificationService *notifications.Service // Added
+	notificationService *notifications.Service
 	config              *config.Config
 }
 
 // NewHandler creates a new follow handler
-func NewHandler(repo *Repository, authRepo *auth.Repository, notificationService *notifications.Service, cfg *config.Config) *Handler { // Modified
+func NewHandler(repo *Repository, authRepo *auth.Repository, notificationService *notifications.Service, cfg *config.Config) *Handler {
 	return &Handler{
 		repo:                repo,
 		authRepo:            authRepo,
-		notificationService: notificationService, // Added
+		notificationService: notificationService,
 		config:              cfg,
 	}
+}
+
+// currentUser returns the authenticated user, or nil for anonymous requests
+func currentUser(c *gin.Context) *auth.User {
+	if val, exists := c.Get("user"); exists {
+		if user, ok := val.(*auth.User); ok {
+			return user
+		}
+	}
+	return nil
+}
+
+// loadTargetUser parses the :id path parameter ("me" = the viewer) and loads that user, hiding
+// users who blocked the viewer. On failure it writes the response and returns ok=false.
+func (h *Handler) loadTargetUser(c *gin.Context, viewer *auth.User) (*auth.User, bool) {
+	idStr := c.Param("id")
+	if idStr == "me" {
+		if viewer == nil {
+			response.Unauthorized(c, "Please sign in to see your own followers and following", "AUTH_REQUIRED")
+			return nil, false
+		}
+		return viewer, true
+	}
+
+	targetID, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		response.BadRequest(c, `"`+idStr+`" isn't a valid user ID`, "INVALID_ID")
+		return nil, false
+	}
+
+	target, err := h.authRepo.GetUserByObjectID(c.Request.Context(), targetID)
+	if err != nil {
+		if errors.Is(err, auth.ErrUserNotFound) {
+			response.NotFound(c, "This user doesn't exist or has deleted their account", "USER_NOT_FOUND")
+		} else {
+			log.Printf("follows: loading user %s failed: %v", idStr, err)
+			response.InternalServerError(c, "We couldn't load this user right now. Please try again", "DATABASE_ERROR")
+		}
+		return nil, false
+	}
+	if !auth.CanViewProfile(target, viewer) {
+		response.NotFound(c, "This user doesn't exist or has deleted their account", "USER_NOT_FOUND")
+		return nil, false
+	}
+	return target, true
 }
 
 // FollowAction godoc
@@ -42,117 +89,136 @@ func NewHandler(repo *Repository, authRepo *auth.Repository, notificationService
 // @Success 200 {object} response.APIResponse{data=FollowActionResponse}
 // @Failure 400 {object} response.APIResponse
 // @Failure 401 {object} response.APIResponse
+// @Failure 403 {object} response.APIResponse
 // @Failure 404 {object} response.APIResponse
 // @Router /users/{id}/follow [post]
 func (h *Handler) FollowAction(c *gin.Context) {
-	// Extract authenticated user
-	user, exists := c.Get("user")
-	if !exists {
-		response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
-		return
-	}
-	currentUser := user.(*auth.User)
-
-	// Get target user ID from path
-	targetIDStr := c.Param("id")
-	targetID, err := primitive.ObjectIDFromHex(targetIDStr)
-	if err != nil {
-		response.BadRequest(c, "Invalid user ID format", "INVALID_ID")
+	me := currentUser(c)
+	if me == nil {
+		response.Unauthorized(c, "Please sign in to follow people", "UNAUTHORIZED")
 		return
 	}
 
-	// Bind request
 	var req FollowActionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, `action is required and must be "follow" or "unfollow"`, "INVALID_REQUEST")
+		response.BadRequest(c, `The request body must be JSON like {"action": "follow"} or {"action": "unfollow"}`, "INVALID_REQUEST")
 		return
 	}
-
-	// Validate request
 	if err := ValidateFollowActionRequest(&req); err != nil {
 		response.BadRequest(c, err.Error(), "INVALID_ACTION")
 		return
 	}
 
-	// Check if trying to follow self
-	if currentUser.ID == targetID {
-		response.BadRequest(c, "You cannot follow yourself", "CANNOT_FOLLOW_SELF")
+	if c.Param("id") == "me" || c.Param("id") == me.ID.Hex() {
+		response.BadRequest(c, "You can't follow or unfollow yourself", "CANNOT_FOLLOW_SELF")
 		return
+	}
+
+	// Unfollowing a user who blocked you must still work, so only "follow" hides them
+	var target *auth.User
+	if req.Action == "follow" {
+		var ok bool
+		if target, ok = h.loadTargetUser(c, me); !ok {
+			return
+		}
+	} else {
+		var ok bool
+		if target, ok = h.loadTargetUser(c, nil); !ok {
+			return
+		}
 	}
 
 	ctx := c.Request.Context()
-
-	// Get target user
-	targetUser, err := h.authRepo.GetUserByID(ctx, targetID.Hex())
-	if err != nil {
-		response.NotFound(c, "User not found", "USER_NOT_FOUND")
-		return
-	}
-
+	targetID := target.ID
 	var isFollowing bool
 
 	if req.Action == "follow" {
-		// Blocked users (either direction) can't follow each other
-		if blocked, err := h.authRepo.IsBlockedBetween(ctx, currentUser, targetID); err != nil {
-			response.InternalServerError(c, "Failed to follow user", "FOLLOW_FAILED")
+		if me.HasBlocked(targetID) {
+			response.Forbidden(c, "You've blocked this user. Unblock them first if you want to follow them", "USER_BLOCKED")
 			return
-		} else if blocked {
-			response.Forbidden(c, "You can't follow this user", "USER_BLOCKED")
+		}
+		if target.HasBlocked(me.ID) {
+			// Not reachable through loadTargetUser (it reports 404), kept as a safety net
+			response.Forbidden(c, "You can't follow this account", "USER_BLOCKED")
 			return
 		}
 
-		// Only the request that actually inserted the follow updates counts and notifies
-		created, err := h.repo.CreateFollow(ctx, currentUser.ID, targetID)
+		created, err := h.repo.CreateFollow(ctx, me.ID, targetID)
 		if err != nil {
-			response.InternalServerError(c, "Failed to follow user", "FOLLOW_FAILED")
+			log.Printf("follows: create %s -> %s failed: %v", me.ID.Hex(), targetID.Hex(), err)
+			response.InternalServerError(c, "We couldn't follow this user right now. Please try again", "FOLLOW_FAILED")
 			return
 		}
-		if created {
-			_ = h.authRepo.IncrementFollowerCount(ctx, targetID, 1)
-			_ = h.authRepo.IncrementFollowingCount(ctx, currentUser.ID, 1)
 
-			go func(actorID, target primitive.ObjectID) {
-				_ = h.notificationService.CreateFollowNotification(context.Background(), actorID, target)
-			}(currentUser.ID, targetID)
+		if created {
+			// Re-check the block *after* inserting: if a block landed between the check above
+			// and the insert, the blocker's follow cleanup may already have run and missed it.
+			if blocked, err := h.authRepo.IsBlockedBetween(ctx, me, targetID); err != nil || blocked {
+				_, _ = h.repo.DeleteFollow(ctx, me.ID, targetID)
+				if err != nil {
+					log.Printf("follows: block re-check failed: %v", err)
+					response.InternalServerError(c, "We couldn't follow this user right now. Please try again", "FOLLOW_FAILED")
+				} else {
+					response.Forbidden(c, "You can't follow this account", "USER_BLOCKED")
+				}
+				return
+			}
+
+			// Only the request that actually inserted the follow updates counts and notifies
+			if err := h.authRepo.IncrementFollowerCount(ctx, targetID, 1); err != nil {
+				log.Printf("follows: followerCount +1 for %s failed: %v", targetID.Hex(), err)
+			}
+			if err := h.authRepo.IncrementFollowingCount(ctx, me.ID, 1); err != nil {
+				log.Printf("follows: followingCount +1 for %s failed: %v", me.ID.Hex(), err)
+			}
+			if h.notificationService != nil {
+				go func(actorID, target primitive.ObjectID) {
+					if err := h.notificationService.CreateFollowNotification(context.Background(), actorID, target); err != nil {
+						log.Printf("follows: follow notification failed: %v", err)
+					}
+				}(me.ID, targetID)
+			}
 		}
 		isFollowing = true
 	} else {
-		deleted, err := h.repo.DeleteFollow(ctx, currentUser.ID, targetID)
+		deleted, err := h.repo.DeleteFollow(ctx, me.ID, targetID)
 		if err != nil {
-			response.InternalServerError(c, "Failed to unfollow user", "UNFOLLOW_FAILED")
+			log.Printf("follows: delete %s -> %s failed: %v", me.ID.Hex(), targetID.Hex(), err)
+			response.InternalServerError(c, "We couldn't unfollow this user right now. Please try again", "UNFOLLOW_FAILED")
 			return
 		}
 		// Only decrement when a follow was actually removed
 		if deleted {
-			_ = h.authRepo.IncrementFollowerCount(ctx, targetID, -1)
-			_ = h.authRepo.IncrementFollowingCount(ctx, currentUser.ID, -1)
+			if err := h.authRepo.IncrementFollowerCount(ctx, targetID, -1); err != nil {
+				log.Printf("follows: followerCount -1 for %s failed: %v", targetID.Hex(), err)
+			}
+			if err := h.authRepo.IncrementFollowingCount(ctx, me.ID, -1); err != nil {
+				log.Printf("follows: followingCount -1 for %s failed: %v", me.ID.Hex(), err)
+			}
 		}
 		isFollowing = false
 	}
 
 	// Fetch updated counts (keep the earlier values if a re-read fails)
-	if updated, err := h.authRepo.GetUserByID(ctx, targetID.Hex()); err == nil && updated != nil {
-		targetUser = updated
+	if updated, err := h.authRepo.GetUserByObjectID(ctx, targetID); err == nil {
+		target = updated
 	}
-	if updated, err := h.authRepo.GetUserByID(ctx, currentUser.ID.Hex()); err == nil && updated != nil {
-		currentUser = updated
+	if updated, err := h.authRepo.GetUserByObjectID(ctx, me.ID); err == nil {
+		me = updated
 	}
 
-	// Build response
-	resp := FollowActionResponse{
+	response.Success(c, FollowActionResponse{
 		IsFollowing: isFollowing,
 		TargetUser: FollowTargetUserInfo{
-			ID:            targetUser.ID,
-			Username:      targetUser.Username,
-			DisplayName:   targetUser.DisplayName,
-			FollowerCount: targetUser.FollowerCount,
+			ID:            target.ID,
+			Username:      target.Username,
+			DisplayName:   target.DisplayName,
+			FollowerCount: target.FollowerCount,
 		},
 		CurrentUser: FollowCurrentUserInfo{
-			FollowingCount: currentUser.FollowingCount,
+			FollowingCount: me.FollowingCount,
 		},
-	}
-
-	response.Success(c, resp)
+	})
 }
 
 // GetFollowStatus godoc
@@ -168,43 +234,33 @@ func (h *Handler) FollowAction(c *gin.Context) {
 // @Failure 404 {object} response.APIResponse
 // @Router /users/{id}/follow/status [get]
 func (h *Handler) GetFollowStatus(c *gin.Context) {
-	// Extract authenticated user
-	user, exists := c.Get("user")
-	if !exists {
-		response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
+	me := currentUser(c)
+	if me == nil {
+		response.Unauthorized(c, "Please sign in to check follow status", "UNAUTHORIZED")
 		return
 	}
-	currentUser := user.(*auth.User)
 
-	// Get target user ID from path
-	targetIDStr := c.Param("id")
-	targetID, err := primitive.ObjectIDFromHex(targetIDStr)
+	target, ok := h.loadTargetUser(c, me)
+	if !ok {
+		return
+	}
+	if target.ID == me.ID {
+		response.Success(c, FollowStatusResponse{}) // you don't follow yourself
+		return
+	}
+
+	isFollowing, isFollowedBy, err := h.repo.GetFollowStatus(c.Request.Context(), me.ID, target.ID)
 	if err != nil {
-		response.BadRequest(c, "Invalid user ID format", "INVALID_ID")
+		log.Printf("follows: status %s / %s failed: %v", me.ID.Hex(), target.ID.Hex(), err)
+		response.InternalServerError(c, "We couldn't check the follow status right now. Please try again", "STATUS_CHECK_FAILED")
 		return
 	}
 
-	// Check if target user exists
-	_, err = h.authRepo.GetUserByID(c.Request.Context(), targetID.Hex())
-	if err != nil {
-		response.NotFound(c, "User not found", "USER_NOT_FOUND")
-		return
-	}
-
-	// Get follow status in both directions
-	isFollowing, isFollowedBy, err := h.repo.GetFollowStatus(c.Request.Context(), currentUser.ID, targetID)
-	if err != nil {
-		response.InternalServerError(c, "Failed to check follow status", "STATUS_CHECK_FAILED")
-		return
-	}
-
-	resp := FollowStatusResponse{
+	response.Success(c, FollowStatusResponse{
 		IsFollowing:  isFollowing,
 		IsFollowedBy: isFollowedBy,
 		IsMutual:     isFollowing && isFollowedBy,
-	}
-
-	response.Success(c, resp)
+	})
 }
 
 // ListFollows godoc
@@ -212,148 +268,109 @@ func (h *Handler) GetFollowStatus(c *gin.Context) {
 // @Description Get paginated list of followers OR users being followed
 // @Tags follows
 // @Produce json
-// @Param id path string true "Target user's ID"
+// @Param id path string true "Target user's ID (or \"me\")"
 // @Param type query string true "Type: followers or following"
-// @Param page query int false "Page number (default 1)"
+// @Param page query int false "Page number (default 1, max 10000)"
 // @Param limit query int false "Items per page (default 20, max 50)"
 // @Success 200 {object} response.APIResponse{data=PaginatedFollowResponse}
 // @Failure 400 {object} response.APIResponse
 // @Failure 404 {object} response.APIResponse
 // @Router /users/{id}/follows [get]
 func (h *Handler) ListFollows(c *gin.Context) {
-	// Get target user ID from path ("me" resolves to the authenticated user)
-	targetIDStr := c.Param("id")
-	if targetIDStr == "me" {
-		val, exists := c.Get("user")
-		if !exists {
-			response.Unauthorized(c, "Authentication required", "AUTH_REQUIRED")
-			return
-		}
-		me, ok := val.(*auth.User)
-		if !ok {
-			response.InternalServerError(c, "User context error", "INTERNAL_ERROR")
-			return
-		}
-		targetIDStr = me.ID.Hex()
-	}
-	targetID, err := primitive.ObjectIDFromHex(targetIDStr)
-	if err != nil {
-		response.BadRequest(c, "Invalid user ID format", "INVALID_ID")
-		return
-	}
+	viewer := currentUser(c)
 
-	// Check if target user exists
-	_, err = h.authRepo.GetUserByID(c.Request.Context(), targetID.Hex())
+	// Validate the query first: a bad request is reported even for an unknown user
+	query, err := ParseFollowListQuery(c.Query("type"), c.Query("page"), c.Query("limit"))
 	if err != nil {
-		response.NotFound(c, "User not found", "USER_NOT_FOUND")
-		return
-	}
-
-	// Parse and validate query parameters
-	var query FollowListQuery
-	if err := c.ShouldBindQuery(&query); err != nil {
 		response.BadRequest(c, err.Error(), "INVALID_QUERY")
 		return
 	}
 
-	if err := ValidateFollowListQuery(&query); err != nil {
-		response.BadRequest(c, err.Error(), "INVALID_TYPE")
+	target, ok := h.loadTargetUser(c, viewer)
+	if !ok {
+		return
+	}
+	ctx := c.Request.Context()
+
+	// People in a block relationship with the viewer are left out of the list (and its total)
+	hidden, err := h.authRepo.HiddenUserIDs(ctx, viewer)
+	if err != nil {
+		log.Printf("follows: loading blocks for viewer failed: %v", err)
+		response.InternalServerError(c, "We couldn't load this list right now. Please try again", "FETCH_FAILED")
 		return
 	}
 
-	// Get current user if authenticated (for isFollowing field)
-	var currentUserID *primitive.ObjectID
-	if user, exists := c.Get("user"); exists {
-		currentUser := user.(*auth.User)
-		currentUserID = &currentUser.ID
-	}
-
-	// Fetch follows based on type
 	var follows []Follow
 	var total int64
-
 	if query.Type == "followers" {
-		follows, total, err = h.repo.GetFollowers(c.Request.Context(), targetID, query.Page, query.Limit)
+		follows, total, err = h.repo.GetFollowers(ctx, target.ID, hidden, query.Page, query.Limit)
 	} else {
-		follows, total, err = h.repo.GetFollowing(c.Request.Context(), targetID, query.Page, query.Limit)
+		follows, total, err = h.repo.GetFollowing(ctx, target.ID, hidden, query.Page, query.Limit)
 	}
-
 	if err != nil {
-		response.InternalServerError(c, "Failed to fetch follows", "FETCH_FAILED")
+		log.Printf("follows: listing %s of %s failed: %v", query.Type, target.ID.Hex(), err)
+		response.InternalServerError(c, "We couldn't load this list right now. Please try again", "FETCH_FAILED")
 		return
 	}
 
-	// Extract user IDs to fetch
-	var userIDs []primitive.ObjectID
-	for _, follow := range follows {
+	// The user on the other side of each follow
+	listedID := func(f Follow) primitive.ObjectID {
 		if query.Type == "followers" {
-			userIDs = append(userIDs, follow.FollowerID)
-		} else {
-			userIDs = append(userIDs, follow.FollowingID)
+			return f.FollowerID
 		}
+		return f.FollowingID
+	}
+	userIDs := make([]primitive.ObjectID, 0, len(follows))
+	for _, f := range follows {
+		userIDs = append(userIDs, listedID(f))
 	}
 
-	// Fetch user details
-	users, err := h.authRepo.GetUsersByIDs(c.Request.Context(), userIDs)
+	users, err := h.authRepo.GetUsersByIDs(ctx, userIDs)
 	if err != nil {
-		response.InternalServerError(c, "Failed to fetch user details", "FETCH_USERS_FAILED")
+		log.Printf("follows: loading listed users failed: %v", err)
+		response.InternalServerError(c, "We couldn't load this list right now. Please try again", "FETCH_USERS_FAILED")
 		return
 	}
-
-	// Create user map for quick lookup
-	userMap := make(map[primitive.ObjectID]*auth.User)
+	userMap := make(map[primitive.ObjectID]*auth.User, len(users))
 	for i := range users {
 		userMap[users[i].ID] = &users[i]
 	}
 
-	// Get isFollowing status for all users if authenticated
-	var followingMap map[primitive.ObjectID]bool
-	if currentUserID != nil {
-		followingMap, _ = h.repo.GetFollowingIDs(c.Request.Context(), *currentUserID, userIDs)
+	// Whether the viewer follows each listed user
+	followingMap := map[primitive.ObjectID]bool{}
+	if viewer != nil {
+		if followingMap, err = h.repo.GetFollowingIDs(ctx, viewer.ID, userIDs); err != nil {
+			log.Printf("follows: loading viewer follow status failed: %v", err)
+			response.InternalServerError(c, "We couldn't load this list right now. Please try again", "FETCH_FAILED")
+			return
+		}
 	}
 
-	// Build response
-	var followUsers []FollowUserResponse
-	for _, follow := range follows {
-		var userID primitive.ObjectID
-		if query.Type == "followers" {
-			userID = follow.FollowerID
-		} else {
-			userID = follow.FollowingID
-		}
-
-		user, exists := userMap[userID]
+	followUsers := make([]FollowUserResponse, 0, len(follows)) // [] rather than null when empty
+	for _, f := range follows {
+		user, exists := userMap[listedID(f)]
 		if !exists {
-			continue
+			continue // account deleted while the follow was still being cleaned up
 		}
-
-		isFollowing := false
-		if followingMap != nil {
-			isFollowing = followingMap[userID]
-		}
-
+		picture := user.ProfilePictureURL
 		followUsers = append(followUsers, FollowUserResponse{
 			ID:             user.ID,
 			Username:       user.Username,
 			DisplayName:    user.DisplayName,
-			ProfilePicture: &user.ProfilePictureURL,
+			ProfilePicture: &picture,
 			Bio:            user.Bio,
-			IsFollowing:    isFollowing,
-			FollowedAt:     follow.CreatedAt,
+			IsFollowing:    followingMap[user.ID],
+			FollowedAt:     f.CreatedAt,
 		})
 	}
 
-	// Calculate pagination
 	totalPages := int(math.Ceil(float64(total) / float64(query.Limit)))
+	resp := PaginatedFollowResponse{Data: followUsers}
+	resp.Pagination.Page = query.Page
+	resp.Pagination.Limit = query.Limit
+	resp.Pagination.Total = total
+	resp.Pagination.TotalPages = totalPages
+	resp.Pagination.HasMore = query.Page < totalPages
 
-	paginatedResponse := PaginatedFollowResponse{
-		Data: followUsers,
-	}
-	paginatedResponse.Pagination.Page = query.Page
-	paginatedResponse.Pagination.Limit = query.Limit
-	paginatedResponse.Pagination.Total = total
-	paginatedResponse.Pagination.TotalPages = totalPages
-	paginatedResponse.Pagination.HasMore = query.Page < totalPages
-
-	response.Success(c, paginatedResponse)
+	response.Success(c, resp)
 }

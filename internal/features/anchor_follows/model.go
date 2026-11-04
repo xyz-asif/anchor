@@ -18,13 +18,13 @@ type AnchorFollow struct {
 
 // FollowAnchorRequest for POST /anchors/:id/follow
 type FollowAnchorRequest struct {
-	Action         string `json:"action" binding:"required,oneof=follow unfollow"`
+	Action         string `json:"action" binding:"required"` // "follow" or "unfollow", any case
 	NotifyOnUpdate *bool  `json:"notifyOnUpdate"`
 }
 
 // ToggleNotificationsRequest for PATCH /anchors/:id/follow/notifications
 type ToggleNotificationsRequest struct {
-	NotifyOnUpdate bool `json:"notifyOnUpdate"`
+	NotifyOnUpdate *bool `json:"notifyOnUpdate"` // required; a pointer so "missing" isn't read as false
 }
 
 // ListFollowingAnchorsQuery for GET /users/me/following-anchors

@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"firebase.google.com/go/v4/auth"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/xyz-asif/gotodo/internal/config"
@@ -46,22 +45,20 @@ type PinnedAnchorData struct {
 }
 
 type Handler struct {
-	repo           *Repository
-	firebaseClient *auth.Client
-	config         *config.Config
-	cloudinary     *cloudinary.Service
-	followService  FollowService
-	anchorService  AnchorService
+	repo          *Repository
+	config        *config.Config
+	cloudinary    *cloudinary.Service
+	followService FollowService
+	anchorService AnchorService
 }
 
-func NewHandler(repo *Repository, firebaseClient *auth.Client, cfg *config.Config, cld *cloudinary.Service, followService FollowService, anchorService AnchorService) *Handler {
+func NewHandler(repo *Repository, cfg *config.Config, cld *cloudinary.Service, followService FollowService, anchorService AnchorService) *Handler {
 	return &Handler{
-		repo:           repo,
-		firebaseClient: firebaseClient,
-		config:         cfg,
-		cloudinary:     cld,
-		followService:  followService,
-		anchorService:  anchorService,
+		repo:          repo,
+		config:        cfg,
+		cloudinary:    cld,
+		followService: followService,
+		anchorService: anchorService,
 	}
 }
 
@@ -129,7 +126,8 @@ func (h *Handler) getJWTConfig() *idToken.Config {
 // issueTokens creates an access/refresh token pair for the user and stores the refresh
 // session. On failure it writes the error response and returns ok=false.
 func (h *Handler) issueTokens(c *gin.Context, user *User) (accessToken, refreshToken string, ok bool) {
-	accessToken, refreshToken, err := idToken.GenerateTokenPair(user.ID.Hex(), user.Email, h.getJWTConfig())
+	jwtConfig := h.getJWTConfig()
+	refreshToken, err := idToken.GenerateRefreshToken(user.ID.Hex(), user.Email, jwtConfig)
 	if err != nil {
 		response.InternalServerError(c, "Failed to generate tokens", "TOKEN_FAILED")
 		return "", "", false
@@ -156,22 +154,60 @@ func (h *Handler) issueTokens(c *gin.Context, user *User) (accessToken, refreshT
 		return "", "", false
 	}
 
+	// The access token is bound to this session, so logging out of it ends the access token too
+	accessToken, err = idToken.GenerateSessionAccessToken(user.ID.Hex(), user.Email, claims.ID, jwtConfig)
+	if err != nil {
+		_ = h.repo.RevokeRefreshToken(c.Request.Context(), claims.ID)
+		response.InternalServerError(c, "Failed to generate tokens", "TOKEN_FAILED")
+		return "", "", false
+	}
+
 	return accessToken, refreshToken, true
 }
 
-// uniqueUsername returns base, or base followed by the first number that makes it unique
+// maxSequentialUsernameTries bounds how many "name1, name2, ..." candidates are checked before
+// switching to a random suffix, so a very common name can't trigger thousands of DB queries.
+const maxSequentialUsernameTries = 5
+
+// uniqueUsername returns base, or base with a suffix that makes it unique. Every result passes
+// ValidateUsername (length, characters, reserved names).
 func (h *Handler) uniqueUsername(ctx context.Context, base string) (string, error) {
-	username := base
-	for counter := 1; ; counter++ {
-		exists, err := h.repo.UsernameExists(ctx, username)
+	base = usernameBase(base)
+	for attempt := 0; attempt < maxSequentialUsernameTries+5; attempt++ {
+		var candidate string
+		switch {
+		case attempt == 0:
+			candidate = base
+		case attempt <= maxSequentialUsernameTries:
+			candidate = withUsernameSuffix(base, fmt.Sprintf("%d", attempt))
+		default:
+			candidate = withUsernameSuffix(base, randomDigits(6))
+		}
+		if ValidateUsername(candidate) != nil {
+			continue
+		}
+		exists, err := h.repo.UsernameExists(ctx, candidate)
 		if err != nil {
 			return "", err
 		}
 		if !exists {
-			return username, nil
+			return candidate, nil
 		}
-		username = fmt.Sprintf("%s%d", base, counter)
 	}
+	return "", errors.New("could not generate a unique username")
+}
+
+// cleanDisplayName trims a display name taken from an external source (Google, dev login) and
+// cuts it to the 50-character limit; it returns fallback when too little is left.
+func cleanDisplayName(name, fallback string) string {
+	name = strings.TrimSpace(stripControlChars(name))
+	if r := []rune(name); len(r) > 50 {
+		name = strings.TrimSpace(string(r[:50]))
+	}
+	if ValidateDisplayName(name) != nil {
+		return fallback
+	}
+	return name
 }
 
 // GoogleLogin handles Google OAuth login/registration
@@ -214,63 +250,10 @@ func (h *Handler) GoogleLogin(c *gin.Context) {
 	// Normalize email to ensure consistency
 	googleUser.Email = strings.ToLower(googleUser.Email)
 
-	// Check if user exists by Google ID
-	user, err := h.repo.GetUserByGoogleID(c.Request.Context(), googleUser.UID)
-	if err != nil {
-		response.InternalServerError(c, "Database error", "DATABASE_ERROR")
+	user, isNewUser, aerr := h.findOrCreateGoogleUser(c.Request.Context(), googleUser)
+	if aerr != nil {
+		response.Error(c, aerr.status, aerr.message, aerr.code)
 		return
-	}
-
-	isNewUser := false
-	if user == nil {
-		// User not found by Google ID. Check if user exists by email to link account.
-		userByEmail, err := h.repo.GetUserByEmail(c.Request.Context(), googleUser.Email)
-		if err != nil {
-			response.InternalServerError(c, "Database error", "DATABASE_ERROR")
-			return
-		}
-
-		if userByEmail != nil {
-			// User exists with this email. Link Google ID.
-			user = userByEmail
-			updates := map[string]interface{}{
-				"googleId":  googleUser.UID,
-				"updatedAt": time.Now(),
-			}
-			if err := h.repo.UpdateUser(c.Request.Context(), user.ID.Hex(), updates); err != nil {
-				fmt.Printf("Failed to link Google ID: %v\n", err)
-				response.InternalServerError(c, "Failed to link account", "DATABASE_ERROR")
-				return
-			}
-		} else {
-			// Create new user
-			isNewUser = true
-			username, err := h.uniqueUsername(c.Request.Context(), GenerateUniqueUsername(googleUser.Name))
-			if err != nil {
-				response.InternalServerError(c, "Database error", "DATABASE_ERROR")
-				return
-			}
-
-			user = &User{
-				GoogleID:          googleUser.UID,
-				Email:             googleUser.Email,
-				Username:          username,
-				DisplayName:       googleUser.Name,
-				ProfilePictureURL: googleUser.Picture,
-				FollowerCount:     0,
-				FollowingCount:    0,
-				AnchorCount:       0,
-				UsernameChanged:   false,
-				IsVerified:        false,
-				JoinedAt:          time.Now(),
-			}
-
-			if err := h.repo.CreateUser(c.Request.Context(), user); err != nil {
-				fmt.Printf("CreateUser failed: %v\n", err)
-				response.InternalServerError(c, "Failed to create user", "DATABASE_ERROR")
-				return
-			}
-		}
 	}
 
 	accessToken, refreshToken, ok := h.issueTokens(c, user)
@@ -287,7 +270,76 @@ func (h *Handler) GoogleLogin(c *gin.Context) {
 		User:         user,
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
+		IsNewUser:    isNewUser,
 	})
+}
+
+// findOrCreateGoogleUser returns the account for a verified Google user: by Google ID, else by
+// email (linking the Google ID), else a newly created account.
+func (h *Handler) findOrCreateGoogleUser(ctx context.Context, googleUser *GoogleUser) (*User, bool, *authError) {
+	dbErr := &authError{http.StatusInternalServerError, "Database error", "DATABASE_ERROR"}
+
+	// Retried when a concurrent login for the same person (double tap, two devices) creates
+	// the account between our lookup and our insert, or takes the generated username.
+	for attempt := 0; attempt < 3; attempt++ {
+		user, err := h.repo.GetUserByGoogleID(ctx, googleUser.UID)
+		if err != nil {
+			return nil, false, dbErr
+		}
+		if user != nil {
+			return user, false, nil
+		}
+
+		userByEmail, err := h.repo.GetUserByEmail(ctx, googleUser.Email)
+		if err != nil {
+			return nil, false, dbErr
+		}
+		if userByEmail != nil {
+			// A concurrent first login for the same person created the account between our two
+			// lookups: it's already linked to this Google account
+			if userByEmail.GoogleID == googleUser.UID {
+				return userByEmail, false, nil
+			}
+			// A Google account's subject ID never changes, so an account already linked to a
+			// *different* Google account must not be taken over just because the email matches
+			// (e.g. a recycled Workspace address). Dev-login placeholders may be linked.
+			if userByEmail.GoogleID != "" && !strings.HasPrefix(userByEmail.GoogleID, "dev_") {
+				log.Printf("Google login: email %s is linked to another Google account", googleUser.Email)
+				return nil, false, &authError{http.StatusConflict,
+					"This email is already linked to a different Google account", "ACCOUNT_CONFLICT"}
+			}
+			if err := h.repo.UpdateUser(ctx, userByEmail.ID.Hex(), map[string]interface{}{"googleId": googleUser.UID}); err != nil {
+				log.Printf("Failed to link Google ID: %v", err)
+				return nil, false, &authError{http.StatusInternalServerError, "Failed to link account", "DATABASE_ERROR"}
+			}
+			userByEmail.GoogleID = googleUser.UID
+			return userByEmail, false, nil
+		}
+
+		username, err := h.uniqueUsername(ctx, GenerateUniqueUsername(googleUser.Name))
+		if err != nil {
+			return nil, false, dbErr
+		}
+		now := time.Now()
+		user = &User{
+			GoogleID:          googleUser.UID,
+			Email:             googleUser.Email,
+			Username:          username,
+			DisplayName:       cleanDisplayName(googleUser.Name, username),
+			ProfilePictureURL: googleUser.Picture,
+			JoinedAt:          now,
+		}
+		err = h.repo.CreateUser(ctx, user)
+		if err == nil {
+			return user, true, nil
+		}
+		if !mongo.IsDuplicateKeyError(err) {
+			log.Printf("CreateUser failed: %v", err)
+			return nil, false, &authError{http.StatusInternalServerError, "Failed to create user", "DATABASE_ERROR"}
+		}
+		// Duplicate key: loop to pick up the concurrently created account or a new username
+	}
+	return nil, false, &authError{http.StatusConflict, "Could not create account, please retry", "ACCOUNT_CREATE_CONFLICT"}
 }
 
 // DevLogin godoc
@@ -325,24 +377,14 @@ func (h *Handler) DevLogin(c *gin.Context) {
 	}
 	if user == nil {
 		// Create new dev user
-		displayName := "Dev User"
-		if req.DisplayName != "" {
-			displayName = req.DisplayName
-		}
-
+		now := time.Now()
 		user = &User{
-			ID:                primitive.NewObjectID(),
-			GoogleID:          "dev_" + primitive.NewObjectID().Hex(),
-			Email:             req.Email,
-			Username:          "", // set below
-			DisplayName:       displayName,
-			ProfilePictureURL: "",
-			IsVerified:        false,
-			FollowerCount:     0,
-			FollowingCount:    0,
-			AnchorCount:       0,
-			CreatedAt:         time.Now(),
-			UpdatedAt:         time.Now(),
+			ID:          primitive.NewObjectID(),
+			GoogleID:    "dev_" + primitive.NewObjectID().Hex(),
+			Email:       req.Email,
+			Username:    "", // set below
+			DisplayName: cleanDisplayName(req.DisplayName, "Dev User"),
+			JoinedAt:    now,
 		}
 
 		// "dev_" prefix keeps RequiresUsername=true so the client still runs username setup.
@@ -356,9 +398,14 @@ func (h *Handler) DevLogin(c *gin.Context) {
 		user.Username = username
 
 		if err := h.repo.CreateUser(ctx, user); err != nil {
-			log.Printf("Dev login CreateUser failed: %v", err)
-			response.InternalServerError(c, "Failed to create user", "CREATE_FAILED")
-			return
+			// A concurrent dev login for the same email may have created the account first
+			existing, lookupErr := h.repo.GetUserByEmail(ctx, req.Email)
+			if !mongo.IsDuplicateKeyError(err) || lookupErr != nil || existing == nil {
+				log.Printf("Dev login CreateUser failed: %v", err)
+				response.InternalServerError(c, "Failed to create user", "CREATE_FAILED")
+				return
+			}
+			user = existing
 		}
 	}
 
@@ -415,9 +462,9 @@ func (h *Handler) RefreshToken(c *gin.Context) {
 		return
 	}
 
-	// Generate NEW Access Token
+	// Generate a new access token bound to the same session
 	jwtConfig := h.getJWTConfig()
-	newAccessToken, err := idToken.GenerateToken(claims.UserID, claims.Email, jwtConfig)
+	newAccessToken, err := idToken.GenerateSessionAccessToken(claims.UserID, claims.Email, claims.ID, jwtConfig)
 	if err != nil {
 		response.InternalServerError(c, "Failed to generate token", "INTERNAL_ERROR")
 		return
@@ -555,9 +602,8 @@ func (h *Handler) GetPublicProfile(c *gin.Context) {
 		return
 	}
 
-	user, err := h.repo.GetUserByObjectID(c.Request.Context(), userID)
-	if err != nil {
-		response.NotFound(c, "User not found", "USER_NOT_FOUND")
+	user, ok := h.loadVisibleUser(c, userID)
+	if !ok {
 		return
 	}
 
@@ -612,6 +658,17 @@ func (h *Handler) UpdateProfile(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request format", "INVALID_JSON")
 		return
+	}
+
+	// Store exactly what was validated: trimmed, without invisible/control characters
+	// (validation used to trim but the untrimmed value was saved)
+	if req.DisplayName != nil {
+		v := strings.TrimSpace(stripControlChars(*req.DisplayName))
+		req.DisplayName = &v
+	}
+	if req.Bio != nil {
+		v := strings.TrimSpace(stripControlCharsKeepNewlines(*req.Bio))
+		req.Bio = &v
 	}
 
 	if err := ValidateUpdateProfileRequest(&req); err != nil {
@@ -720,6 +777,12 @@ func (h *Handler) UpdateUsername(c *gin.Context) {
 	}
 	req.Username = strings.ToLower(strings.TrimSpace(req.Username))
 
+	// Keeping the current name is not a change (and must not be reported as "taken" by yourself)
+	if req.Username == user.Username {
+		response.Success(c, user)
+		return
+	}
+
 	usernameExists, err := h.repo.UsernameExists(c.Request.Context(), req.Username)
 	if err != nil {
 		response.InternalServerError(c, "Database error", "DATABASE_ERROR")
@@ -730,13 +793,12 @@ func (h *Handler) UpdateUsername(c *gin.Context) {
 		return
 	}
 
-	updates := map[string]interface{}{
-		"username":          req.Username,
-		"usernameChanged":   true,
-		"usernameChangedAt": time.Now(),
-	}
-
-	if err := h.repo.UpdateUser(c.Request.Context(), user.ID.Hex(), updates); err != nil {
+	// Atomic "only once" check: two concurrent requests from the same user can't both succeed
+	if err := h.repo.SetUsernameOnce(c.Request.Context(), user.ID, req.Username); err != nil {
+		if errors.Is(err, ErrUsernameAlreadyChanged) {
+			response.BadRequest(c, "Username can only be changed once", "USERNAME_ALREADY_CHANGED")
+			return
+		}
 		// Two users racing for the same name: the unique index rejects the second one
 		if mongo.IsDuplicateKeyError(err) {
 			response.Conflict(c, "Username already taken", "USERNAME_TAKEN")
@@ -822,23 +884,16 @@ func (h *Handler) UploadProfilePicture(c *gin.Context) {
 		return
 	}
 
-	// Update user
-	updates := map[string]interface{}{
-		"profilePictureUrl":      uploadResult.URL,
-		"profilePicturePublicId": uploadResult.PublicID,
-	}
-
-	if err := h.repo.UpdateUser(c.Request.Context(), user.ID.Hex(), updates); err != nil {
+	// Point the profile at the new image and get back the image it replaced (read atomically,
+	// so concurrent uploads never delete an image that is still in use or leave one orphaned)
+	previousID, err := h.repo.SwapUserImage(c.Request.Context(), user.ID, "profilePictureUrl", "profilePicturePublicId", uploadResult.URL, uploadResult.PublicID)
+	if err != nil {
 		// Don't leave the just-uploaded image orphaned
 		h.deleteAsset(c.Request.Context(), uploadResult.PublicID)
 		response.InternalServerError(c, "Failed to update user profile", "DATABASE_ERROR")
 		return
 	}
-
-	// Only now that the profile points at the new image is the old one removed
-	if user.ProfilePicturePublicID != "" {
-		h.deleteAsset(c.Request.Context(), user.ProfilePicturePublicID)
-	}
+	h.deleteAsset(c.Request.Context(), previousID)
 
 	response.Success(c, ProfilePictureResponse{
 		ProfilePictureURL: uploadResult.URL,
@@ -911,23 +966,16 @@ func (h *Handler) UploadCoverImage(c *gin.Context) {
 		return
 	}
 
-	// Update user
-	updates := map[string]interface{}{
-		"coverImageUrl":      uploadResult.URL,
-		"coverImagePublicId": uploadResult.PublicID,
-	}
-
-	if err := h.repo.UpdateUser(c.Request.Context(), user.ID.Hex(), updates); err != nil {
+	// Point the profile at the new image and get back the image it replaced (read atomically,
+	// so concurrent uploads never delete an image that is still in use or leave one orphaned)
+	previousID, err := h.repo.SwapUserImage(c.Request.Context(), user.ID, "coverImageUrl", "coverImagePublicId", uploadResult.URL, uploadResult.PublicID)
+	if err != nil {
 		// Don't leave the just-uploaded image orphaned
 		h.deleteAsset(c.Request.Context(), uploadResult.PublicID)
 		response.InternalServerError(c, "Failed to update user profile", "DATABASE_ERROR")
 		return
 	}
-
-	// Only now that the profile points at the new image is the old one removed
-	if user.CoverImagePublicID != "" {
-		h.deleteAsset(c.Request.Context(), user.CoverImagePublicID)
-	}
+	h.deleteAsset(c.Request.Context(), previousID)
 
 	response.Success(c, CoverImageResponse{
 		CoverImageURL: uploadResult.URL,
@@ -955,19 +1003,14 @@ func (h *Handler) RemoveProfilePicture(c *gin.Context) {
 		return
 	}
 
-	if user.ProfilePicturePublicID != "" {
-		h.deleteAsset(c.Request.Context(), user.ProfilePicturePublicID)
-	}
-
-	updates := map[string]interface{}{
-		"profilePictureUrl":      "",
-		"profilePicturePublicId": "",
-	}
-
-	if err := h.repo.UpdateUser(c.Request.Context(), user.ID.Hex(), updates); err != nil {
+	// Clear the profile first and delete the file only afterwards, so a failed update never
+	// leaves the profile pointing at a deleted image
+	previousID, err := h.repo.SwapUserImage(c.Request.Context(), user.ID, "profilePictureUrl", "profilePicturePublicId", "", "")
+	if err != nil {
 		response.InternalServerError(c, "Failed to update user profile", "DATABASE_ERROR")
 		return
 	}
+	h.deleteAsset(c.Request.Context(), previousID)
 
 	response.Success(c, "Profile picture removed")
 }
@@ -993,19 +1036,14 @@ func (h *Handler) RemoveCoverImage(c *gin.Context) {
 		return
 	}
 
-	if user.CoverImagePublicID != "" {
-		h.deleteAsset(c.Request.Context(), user.CoverImagePublicID)
-	}
-
-	updates := map[string]interface{}{
-		"coverImageUrl":      "",
-		"coverImagePublicId": "",
-	}
-
-	if err := h.repo.UpdateUser(c.Request.Context(), user.ID.Hex(), updates); err != nil {
+	// Clear the profile first and delete the file only afterwards, so a failed update never
+	// leaves the profile pointing at a deleted image
+	previousID, err := h.repo.SwapUserImage(c.Request.Context(), user.ID, "coverImageUrl", "coverImagePublicId", "", "")
+	if err != nil {
 		response.InternalServerError(c, "Failed to update user profile", "DATABASE_ERROR")
 		return
 	}
+	h.deleteAsset(c.Request.Context(), previousID)
 
 	response.Success(c, "Cover image removed")
 }
@@ -1054,9 +1092,7 @@ func (h *Handler) GetPinnedAnchors(c *gin.Context) {
 	}
 
 	// Determine visibility access and user existence
-	_, err = h.repo.GetUserByObjectID(c.Request.Context(), userID)
-	if err != nil {
-		response.NotFound(c, "User not found", "USER_NOT_FOUND")
+	if _, ok := h.loadVisibleUser(c, userID); !ok {
 		return
 	}
 
@@ -1127,7 +1163,7 @@ func (h *Handler) DeleteAccount(c *gin.Context) {
 	// 1. Delete all user content (Anchors, Items, Assets) via AnchorService
 	if h.anchorService != nil {
 		if err := h.anchorService.DeleteAllByUser(c.Request.Context(), user.ID); err != nil {
-			fmt.Printf("Failed to delete user content: %v\n", err)
+			log.Printf("Failed to delete user content: %v", err)
 			response.InternalServerError(c, "Failed to delete user content", "DELETE_FAILED")
 			return
 		}
@@ -1148,6 +1184,28 @@ func (h *Handler) DeleteAccount(c *gin.Context) {
 	}
 
 	response.Success(c, "Account deleted successfully")
+}
+
+// loadVisibleUser loads a user's profile for the (optional) viewer. A user who has blocked the
+// viewer is reported as not found, like elsewhere on social platforms. On failure it writes the
+// response and returns ok=false.
+func (h *Handler) loadVisibleUser(c *gin.Context, userID primitive.ObjectID) (*User, bool) {
+	user, err := h.repo.GetUserByObjectID(c.Request.Context(), userID)
+	if err != nil {
+		if errors.Is(err, ErrUserNotFound) {
+			response.NotFound(c, "User not found", "USER_NOT_FOUND")
+		} else {
+			response.InternalServerError(c, "Failed to load user", "DATABASE_ERROR")
+		}
+		return nil, false
+	}
+	if val, exists := c.Get("user"); exists {
+		if viewer, ok := val.(*User); ok && !CanViewProfile(user, viewer) {
+			response.NotFound(c, "User not found", "USER_NOT_FOUND")
+			return nil, false
+		}
+	}
+	return user, true
 }
 
 // deleteAsset removes an image from Cloudinary (best effort; no-op when Cloudinary isn't configured)

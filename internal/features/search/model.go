@@ -22,33 +22,33 @@ const (
 
 // Request DTOs
 
-// UnifiedSearchQuery for GET /search
+// UnifiedSearchQuery for GET /search (parsed by ParseUnifiedQuery)
 type UnifiedSearchQuery struct {
-	Q     string `form:"q" binding:"required,min=2,max=100"`
-	Type  string `form:"type,default=all"`
-	Limit int    `form:"limit,default=10" binding:"min=1,max=20"`
+	Q     string
+	Type  string
+	Limit int
 }
 
-// AnchorSearchQuery for GET /search/anchors
+// AnchorSearchQuery for GET /search/anchors (parsed by ParseAnchorSearchQuery)
 type AnchorSearchQuery struct {
-	Q     string `form:"q" binding:"required,min=2,max=100"`
-	Tag   string `form:"tag"`
-	Sort  string `form:"sort,default=relevant"`
-	Page  int    `form:"page,default=1" binding:"min=1"`
-	Limit int    `form:"limit,default=20" binding:"min=1,max=50"`
+	Q     string
+	Tag   string // normalised; empty = no tag filter
+	Sort  string
+	Page  int
+	Limit int
 }
 
-// UserSearchQuery for GET /search/users
+// UserSearchQuery for GET /search/users (parsed by ParseUserSearchQuery)
 type UserSearchQuery struct {
-	Q     string `form:"q" binding:"required,min=2,max=100"`
-	Page  int    `form:"page,default=1" binding:"min=1"`
-	Limit int    `form:"limit,default=20" binding:"min=1,max=50"`
+	Q     string
+	Page  int
+	Limit int
 }
 
-// TagSearchQuery for GET /search/tags
+// TagSearchQuery for GET /search/tags (parsed by ParseTagSearchQuery)
 type TagSearchQuery struct {
-	Q     string `form:"q" binding:"required,min=1,max=50"`
-	Limit int    `form:"limit,default=10" binding:"min=1,max=20"`
+	Q     string // normalised tag prefix
+	Limit int
 }
 
 // Response DTOs
@@ -102,6 +102,8 @@ type UnifiedSearchAnchorsResult struct {
 	Items   []SearchAnchorResult `json:"items"`
 	Total   int64                `json:"total"`
 	HasMore bool                 `json:"hasMore"`
+	// MatchedAllWords is false when nothing matched every word, so results match some of them
+	MatchedAllWords bool `json:"matchedAllWords"`
 }
 
 // UnifiedSearchUsersResult for unified search
@@ -109,6 +111,8 @@ type UnifiedSearchUsersResult struct {
 	Items   []SearchUserResult `json:"items"`
 	Total   int64              `json:"total"`
 	HasMore bool               `json:"hasMore"`
+	// MatchedAllWords is false when nobody matched every word, so results match some of them
+	MatchedAllWords bool `json:"matchedAllWords"`
 }
 
 // UnifiedSearchResponse for GET /search
@@ -121,9 +125,10 @@ type UnifiedSearchResponse struct {
 
 // AnchorSearchMeta for anchor search metadata
 type AnchorSearchMeta struct {
-	Query string  `json:"query"`
-	Tag   *string `json:"tag"`
-	Sort  string  `json:"sort"`
+	Query           string  `json:"query"`
+	Tag             *string `json:"tag"`
+	Sort            string  `json:"sort"`
+	MatchedAllWords bool    `json:"matchedAllWords"` // false: no anchor had every word, these have some
 }
 
 // PaginatedAnchorSearchResponse for GET /search/anchors
@@ -141,7 +146,8 @@ type PaginatedAnchorSearchResponse struct {
 
 // UserSearchMeta for user search metadata
 type UserSearchMeta struct {
-	Query string `json:"query"`
+	Query           string `json:"query"`
+	MatchedAllWords bool   `json:"matchedAllWords"` // false: nobody matched every word, these match some
 }
 
 // PaginatedUserSearchResponse for GET /search/users
@@ -179,7 +185,7 @@ type AnchorSearchDoc struct {
 	EngagementScore int                `bson:"engagementScore"`
 	Tags            []string           `bson:"tags"`
 	CreatedAt       time.Time          `bson:"createdAt"`
-	Score           float64            `bson:"score,omitempty"`
+	Relevance       int                `bson:"relevance,omitempty"`
 }
 
 // UserSearchDoc represents user document from search

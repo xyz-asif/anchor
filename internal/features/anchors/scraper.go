@@ -119,7 +119,42 @@ func FetchURLMetadata(ctx context.Context, targetURL string) (*URLData, error) {
 		return &URLData{OriginalURL: targetURL}, nil
 	}
 
-	return parseHTMLMetadata(io.LimitReader(resp.Body, maxPreviewBodyBytes), targetURL), nil
+	// Relative links on the page are relative to where redirects ended up, not the URL we asked for
+	baseURL := targetURL
+	if resp.Request != nil && resp.Request.URL != nil {
+		baseURL = resp.Request.URL.String()
+	}
+	data := parseHTMLMetadata(io.LimitReader(resp.Body, maxPreviewBodyBytes), baseURL)
+	data.OriginalURL = targetURL
+	return data, nil
+}
+
+// Limits on scraped text, so a hostile page can't store megabytes in an item
+const (
+	maxScrapedTitle       = 300
+	maxScrapedDescription = 1000
+)
+
+// truncateRunes cuts s to at most n characters
+func truncateRunes(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if r := []rune(s); len(r) > n {
+		return strings.TrimSpace(string(r[:n])) + "…"
+	}
+	return s
+}
+
+// safeLink keeps only http(s) links of sane length. Pages can declare og:image or icons as
+// "javascript:" or "data:" URLs, which clients would otherwise render as-is.
+func safeLink(link string) string {
+	if link == "" || len(link) > maxURLLength {
+		return ""
+	}
+	u, err := url.Parse(link)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return ""
+	}
+	return link
 }
 
 // parseHTMLMetadata parses the HTML body and extracts metadata
@@ -176,6 +211,10 @@ func parseHTMLMetadata(body io.Reader, baseURL string) *URLData {
 	}
 	f(doc)
 
+	data.Title = truncateRunes(data.Title, maxScrapedTitle)
+	data.Description = truncateRunes(data.Description, maxScrapedDescription)
+	data.Thumbnail = safeLink(data.Thumbnail)
+	data.Favicon = safeLink(data.Favicon)
 	return data
 }
 

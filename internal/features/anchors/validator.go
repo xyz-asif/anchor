@@ -7,25 +7,27 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/xyz-asif/gotodo/internal/pkg/tags"
 )
 
 // ValidateAnchorTitle validates the anchor title
+// (spaces at either end don't count, so "   ab" is too short)
 func ValidateAnchorTitle(title string) error {
-	title = strings.TrimSpace(title)
-	if utf8.RuneCountInString(title) < 3 {
-		return errors.New("title must be at least 3 characters long")
+	n := utf8.RuneCountInString(strings.TrimSpace(title))
+	if n < 3 {
+		return errors.New("The title needs at least 3 characters")
 	}
-	if utf8.RuneCountInString(title) > 100 {
-		return errors.New("title cannot exceed 100 characters")
+	if n > 100 {
+		return fmt.Errorf("The title can be at most 100 characters (this one has %d)", n)
 	}
 	return nil
 }
 
 // ValidateDescription validates the anchor description
 func ValidateDescription(description string) error {
-	description = strings.TrimSpace(description)
-	if utf8.RuneCountInString(description) > 500 {
-		return errors.New("description cannot exceed 500 characters")
+	if n := utf8.RuneCountInString(strings.TrimSpace(description)); n > 500 {
+		return fmt.Errorf("The description can be at most 500 characters (this one has %d)", n)
 	}
 	return nil
 }
@@ -127,46 +129,110 @@ func ValidateItemType(itemType string) error {
 	return nil
 }
 
+// maxURLLength is the longest link accepted (browsers and most servers cap URLs around 2K)
+const maxURLLength = 2048
+
 // ValidateURL validates a URL format
 func ValidateURL(urlStr string) error {
 	urlStr = strings.TrimSpace(urlStr)
 
 	if urlStr == "" {
-		return errors.New("URL cannot be empty")
+		return errors.New("Please enter a link")
+	}
+	if len(urlStr) > maxURLLength {
+		return fmt.Errorf("This link is too long (the maximum is %d characters)", maxURLLength)
 	}
 
-	// Check if URL starts with http:// or https://
-	if !strings.HasPrefix(urlStr, "http://") && !strings.HasPrefix(urlStr, "https://") {
-		return errors.New("URL must start with http:// or https://")
-	}
-
-	// Parse URL to validate format
 	parsedURL, err := url.Parse(urlStr)
 	if err != nil {
-		return errors.New("invalid URL format")
+		return errors.New("This doesn't look like a valid link. Please check it and try again")
 	}
-
-	// Check if URL has a valid host
-	if parsedURL.Host == "" {
-		return errors.New("URL must have a valid host")
+	// Scheme check on the parsed URL, so "HTTPS://..." works and "javascript:" never does
+	if scheme := strings.ToLower(parsedURL.Scheme); scheme != "http" && scheme != "https" {
+		return errors.New("Links must start with http:// or https://")
+	}
+	if parsedURL.Hostname() == "" {
+		return errors.New("This link is missing a website address (for example https://example.com)")
 	}
 
 	return nil
 }
 
+// maxTextContent is the longest text item, in characters (not bytes, so every language gets the same room)
+const maxTextContent = 10000
+
 // ValidateTextContent validates text content
 func ValidateTextContent(content string) error {
 	content = strings.TrimSpace(content)
 
-	if len(content) < 1 {
-		return errors.New("text content cannot be empty")
+	if content == "" {
+		return errors.New("A text item can't be empty")
 	}
-
-	if len(content) > 10000 {
-		return errors.New("text content cannot exceed 10,000 characters")
+	if n := utf8.RuneCountInString(content); n > maxTextContent {
+		return fmt.Errorf("Text items can be at most %d characters long (this one has %d)", maxTextContent, n)
 	}
 
 	return nil
+}
+
+// maxTags is the most tags an anchor can have
+const maxTags = 5
+
+// NormalizeAndValidateTags returns the canonical tags (same rules as interests and tag feeds),
+// rejecting tags that would otherwise be silently dropped and lists that are too long.
+func NormalizeAndValidateTags(raw []string) ([]string, error) {
+	for _, t := range raw {
+		if strings.TrimSpace(t) != "" && tags.Normalize(t) == "" {
+			return nil, fmt.Errorf(`"%s" can't be used as a tag: tags need %d to %d letters or numbers (hyphens allowed)`,
+				t, tags.MinLen, tags.MaxLen)
+		}
+	}
+	out := tags.NormalizeList(raw)
+	if len(out) > maxTags {
+		return nil, fmt.Errorf("An anchor can have at most %d tags (you sent %d)", maxTags, len(out))
+	}
+	return out, nil
+}
+
+// ValidateCover checks that a cover's value fits its type: a short icon name, an emoji, or an
+// http(s) image link. Both empty clears the cover.
+func ValidateCover(coverType, value string) error {
+	if coverType == "" && value == "" {
+		return nil
+	}
+	if strings.ContainsAny(value, "\x00\n\r\t") {
+		return errors.New("The cover can't contain line breaks or control characters")
+	}
+	switch coverType {
+	case "":
+		return errors.New(`Please also send "coverMediaType" (icon, emoji or image) with the cover`)
+	case "icon":
+		if n := utf8.RuneCountInString(value); n == 0 || n > 50 {
+			return errors.New("An icon cover needs an icon name of 1 to 50 characters")
+		}
+	case "emoji":
+		if n := utf8.RuneCountInString(value); n == 0 || n > 16 {
+			return errors.New("An emoji cover needs a single emoji")
+		}
+	case "image":
+		if value == "" {
+			return errors.New("An image cover needs the image link in \"coverMediaValue\"")
+		}
+		if err := ValidateURL(value); err != nil {
+			return fmt.Errorf("The cover image link isn't valid: %s", lowerFirst(err.Error()))
+		}
+	default:
+		return errors.New("The cover type must be icon, emoji or image")
+	}
+	return nil
+}
+
+func lowerFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	r, size := utf8.DecodeRuneInString(s)
+	return strings.ToLower(string(r)) + s[size:]
 }
 
 // ValidateCreateAnchorRequest validates all fields in CreateAnchorRequest
@@ -234,14 +300,14 @@ func ValidateAddItemRequest(req *AddItemRequest) error {
 	switch req.Type {
 	case ItemTypeURL:
 		if req.URL == nil || *req.URL == "" {
-			return errors.New("URL is required for URL type items")
+			return errors.New(`A link item needs a "url"`)
 		}
 		if err := ValidateURL(*req.URL); err != nil {
 			return err
 		}
 	case ItemTypeText:
 		if req.Content == nil || *req.Content == "" {
-			return errors.New("content is required for text type items")
+			return errors.New(`A text item needs "content"`)
 		}
 		if err := ValidateTextContent(*req.Content); err != nil {
 			return err
@@ -254,18 +320,18 @@ func ValidateAddItemRequest(req *AddItemRequest) error {
 // ValidateReorderItemsRequest validates the reorder request
 func ValidateReorderItemsRequest(req *ReorderItemsRequest, expectedCount int) error {
 	if len(req.ItemIDs) == 0 {
-		return errors.New("itemIds cannot be empty")
+		return errors.New(`Please send the new order as "itemIds": a list of every item ID in this anchor`)
 	}
 
 	if len(req.ItemIDs) != expectedCount {
-		return fmt.Errorf("must include all %d items, got %d", expectedCount, len(req.ItemIDs))
+		return fmt.Errorf("The new order must list all %d items of this anchor exactly once (you sent %d)", expectedCount, len(req.ItemIDs))
 	}
 
 	// Check for duplicates
 	seen := make(map[string]bool)
 	for _, id := range req.ItemIDs {
 		if seen[id] {
-			return errors.New("duplicate item ID found")
+			return fmt.Errorf(`Item "%s" appears more than once in the new order`, id)
 		}
 		seen[id] = true
 	}

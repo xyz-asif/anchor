@@ -1,6 +1,9 @@
 package safety
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/gin-gonic/gin"
 	"github.com/xyz-asif/gotodo/internal/features/auth"
 	"github.com/xyz-asif/gotodo/internal/pkg/response"
@@ -15,19 +18,15 @@ type MutedUserInfo struct {
 	ProfilePictureURL string             `json:"profilePictureUrl"`
 }
 
-// currentUser returns the authenticated user, writing a 401/500 if missing
+// currentUser returns the authenticated user, writing a 401 if missing
 func currentUser(c *gin.Context) (*auth.User, bool) {
-	val, exists := c.Get("user")
-	if !exists {
-		response.Unauthorized(c, "Authentication required", "AUTH_FAILED")
-		return nil, false
+	if val, exists := c.Get("user"); exists {
+		if user, ok := val.(*auth.User); ok {
+			return user, true
+		}
 	}
-	user, ok := val.(*auth.User)
-	if !ok {
-		response.InternalServerError(c, "User context error", "INTERNAL_ERROR")
-		return nil, false
-	}
-	return user, true
+	response.Unauthorized(c, "Please sign in first", "UNAUTHORIZED")
+	return nil, false
 }
 
 // MuteUser godoc
@@ -46,21 +45,23 @@ func (h *Handler) MuteUser(c *gin.Context) {
 	if !ok {
 		return
 	}
-	targetID, err := primitive.ObjectIDFromHex(c.Param("id"))
-	if err != nil {
-		response.BadRequest(c, "Invalid user ID", "INVALID_ID")
+	targetID, ok := parseUserID(c)
+	if !ok {
 		return
 	}
 	if targetID == user.ID {
-		response.BadRequest(c, "You cannot mute yourself", "CANNOT_MUTE_SELF")
+		response.BadRequest(c, "You can't mute yourself", "CANNOT_MUTE_SELF")
 		return
 	}
-	if target, err := h.authRepo.GetUserByObjectID(c.Request.Context(), targetID); err != nil || target == nil {
-		response.NotFound(c, "User not found", "USER_NOT_FOUND")
+	if !h.userExists(c, targetID) {
 		return
 	}
 	if err := h.repo.MuteUser(c.Request.Context(), user.ID, targetID); err != nil {
-		response.InternalServerError(c, "Failed to mute user", "DATABASE_ERROR")
+		if errors.Is(err, ErrListFull) {
+			response.BadRequest(c, fmt.Sprintf("You've muted %d people, which is the maximum. Unmute someone to mute another person", maxMutedUsers), "MUTE_LIST_FULL")
+			return
+		}
+		h.fail(c, "muting", err)
 		return
 	}
 	response.Success(c, gin.H{"userId": targetID, "isMuted": true}, "User muted")
@@ -79,13 +80,12 @@ func (h *Handler) UnmuteUser(c *gin.Context) {
 	if !ok {
 		return
 	}
-	targetID, err := primitive.ObjectIDFromHex(c.Param("id"))
-	if err != nil {
-		response.BadRequest(c, "Invalid user ID", "INVALID_ID")
+	targetID, ok := parseUserID(c)
+	if !ok {
 		return
 	}
 	if err := h.repo.UnmuteUser(c.Request.Context(), user.ID, targetID); err != nil {
-		response.InternalServerError(c, "Failed to unmute user", "DATABASE_ERROR")
+		h.fail(c, "unmuting", err)
 		return
 	}
 	response.Success(c, gin.H{"userId": targetID, "isMuted": false}, "User unmuted")
@@ -93,6 +93,7 @@ func (h *Handler) UnmuteUser(c *gin.Context) {
 
 // GetMutedUsers godoc
 // @Summary List users I have muted
+// @Description Most recently muted first
 // @Tags safety
 // @Produce json
 // @Security BearerAuth
@@ -103,23 +104,12 @@ func (h *Handler) GetMutedUsers(c *gin.Context) {
 	if !ok {
 		return
 	}
-	result := []MutedUserInfo{}
-	if len(user.MutedUsers) > 0 {
-		users, err := h.authRepo.GetUsersByIDs(c.Request.Context(), user.MutedUsers)
-		if err != nil {
-			response.InternalServerError(c, "Failed to fetch muted users", "DATABASE_ERROR")
-			return
-		}
-		for _, u := range users {
-			result = append(result, MutedUserInfo{
-				ID:                u.ID,
-				Username:          u.Username,
-				DisplayName:       u.DisplayName,
-				ProfilePictureURL: u.ProfilePictureURL,
-			})
-		}
+	list, err := h.userList(c, user.MutedUsers)
+	if err != nil {
+		h.fail(c, "loading muted users", err)
+		return
 	}
-	response.Success(c, result)
+	response.Success(c, list)
 }
 
 // HideAnchor godoc
@@ -152,29 +142,38 @@ func (h *Handler) setAnchorHidden(c *gin.Context, hidden bool) {
 	if !ok {
 		return
 	}
-	anchorID, err := primitive.ObjectIDFromHex(c.Param("id"))
+	raw := c.Param("id")
+	anchorID, err := primitive.ObjectIDFromHex(raw)
 	if err != nil {
-		response.BadRequest(c, "Invalid anchor ID", "INVALID_ID")
+		response.BadRequest(c, fmt.Sprintf(`"%s" isn't a valid anchor ID`, raw), "INVALID_ID")
 		return
 	}
+	ctx := c.Request.Context()
 	if hidden {
-		exists, err := h.repo.TargetExists(c.Request.Context(), "anchor", anchorID)
+		// Someone else's private anchor looks like it doesn't exist
+		ownerID, found, err := h.repo.VisibleTarget(ctx, TargetAnchor, anchorID, user.ID)
 		if err != nil {
-			response.InternalServerError(c, "Database error", "DATABASE_ERROR")
+			h.fail(c, "loading anchor", err)
 			return
 		}
-		if !exists {
-			response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
+		if !found {
+			response.NotFound(c, "This anchor doesn't exist or was deleted", "ANCHOR_NOT_FOUND")
 			return
 		}
-		err = h.repo.HideAnchor(c.Request.Context(), user.ID, anchorID)
-		if err != nil {
-			response.InternalServerError(c, "Failed to hide anchor", "DATABASE_ERROR")
+		if ownerID == user.ID {
+			response.BadRequest(c, "This is your own anchor, so it never shows up as a suggestion", "OWN_ANCHOR")
 			return
 		}
-	} else if err := h.repo.UnhideAnchor(c.Request.Context(), user.ID, anchorID); err != nil {
-		response.InternalServerError(c, "Failed to unhide anchor", "DATABASE_ERROR")
+		if err := h.repo.HideAnchor(ctx, user.ID, anchorID); err != nil {
+			h.fail(c, "hiding anchor", err)
+			return
+		}
+		response.Success(c, gin.H{"anchorId": anchorID, "isHidden": true}, "You won't see this anchor in your suggestions")
 		return
 	}
-	response.Success(c, gin.H{"anchorId": anchorID, "isHidden": hidden})
+	if err := h.repo.UnhideAnchor(ctx, user.ID, anchorID); err != nil {
+		h.fail(c, "unhiding anchor", err)
+		return
+	}
+	response.Success(c, gin.H{"anchorId": anchorID, "isHidden": false}, "This anchor can show up in your suggestions again")
 }

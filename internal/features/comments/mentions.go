@@ -1,34 +1,55 @@
 package comments
 
 import (
-	"regexp"
 	"strings"
 )
 
-var mentionRegex = regexp.MustCompile(`@([a-zA-Z0-9_]{3,30})`)
+const (
+	maxMentions       = 10
+	mentionMinLength  = 3
+	mentionMaxLength  = 20 // same limits as usernames
+	usernameCharTable = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+)
 
-// ExtractMentions extracts unique @usernames from content
+func isUsernameChar(b byte) bool {
+	return strings.IndexByte(usernameCharTable, b) >= 0
+}
+
+// ExtractMentions returns the unique, lowercased @usernames in content (at most 10).
+// An @ only starts a mention at the beginning of the text or after a character that can't be
+// part of a username or address, so "me@example.com" mentions nobody, and the whole name must
+// fit the username rules: "@" followed by 25 letters is not a mention of its first 20.
 func ExtractMentions(content string) []string {
-	matches := mentionRegex.FindAllStringSubmatch(content, -1)
-
-	// Deduplicate and normalize to lowercase
 	seen := make(map[string]bool)
 	var usernames []string
 
-	for _, match := range matches {
-		if len(match) < 2 {
+	for i := 0; i < len(content); i++ {
+		if content[i] != '@' {
 			continue
 		}
-		username := strings.ToLower(match[1])
-		if !seen[username] {
-			seen[username] = true
-			usernames = append(usernames, username)
+		if i > 0 {
+			prev := content[i-1]
+			if isUsernameChar(prev) || prev == '.' || prev == '@' || prev == '-' || prev == '+' {
+				continue
+			}
 		}
-	}
-
-	// Limit to 10 mentions
-	if len(usernames) > 10 {
-		usernames = usernames[:10]
+		end := i + 1
+		for end < len(content) && isUsernameChar(content[end]) {
+			end++
+		}
+		name := content[i+1 : end]
+		i = end - 1
+		if len(name) < mentionMinLength || len(name) > mentionMaxLength {
+			continue
+		}
+		name = strings.ToLower(name)
+		if !seen[name] {
+			seen[name] = true
+			usernames = append(usernames, name)
+			if len(usernames) == maxMentions {
+				break
+			}
+		}
 	}
 
 	return usernames

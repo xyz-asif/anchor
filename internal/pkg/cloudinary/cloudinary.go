@@ -1,12 +1,15 @@
 package cloudinary
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/cloudinary/cloudinary-go/v2"
 	"github.com/cloudinary/cloudinary-go/v2/api/uploader"
@@ -168,53 +171,120 @@ func (s *Service) Delete(ctx context.Context, publicID string, resourceType stri
 
 // ValidateImageFile validates an image file upload
 func ValidateImageFile(header *multipart.FileHeader) error {
-	// Check file size
-	if header.Size > MaxImageSize {
-		return fmt.Errorf("image file size exceeds maximum allowed size of %d MB", MaxImageSize/(1024*1024))
-	}
-
-	// Check file extension
-	ext := getFileExtension(header.Filename)
-	if !isAllowedExtension(ext, AllowedImageTypes) {
-		return fmt.Errorf("invalid image file type: %s. Allowed types: %s", ext, strings.Join(AllowedImageTypes, ", "))
-	}
-
-	return nil
+	return validate(header, "image", MaxImageSize, AllowedImageTypes)
 }
 
-// ValidateAudioFile validates an audio file upload
 func ValidateAudioFile(header *multipart.FileHeader) error {
-	// Check file size
-	if header.Size > MaxAudioSize {
-		return fmt.Errorf("audio file size exceeds maximum allowed size of %d MB", MaxAudioSize/(1024*1024))
-	}
-
-	// Check file extension
-	ext := getFileExtension(header.Filename)
-	if !isAllowedExtension(ext, AllowedAudioTypes) {
-		return fmt.Errorf("invalid audio file type: %s. Allowed types: %s", ext, strings.Join(AllowedAudioTypes, ", "))
-	}
-
-	return nil
+	return validate(header, "audio file", MaxAudioSize, AllowedAudioTypes)
 }
 
-// ValidateFile validates a generic file upload
 func ValidateFile(header *multipart.FileHeader) error {
-	// Check file size
-	if header.Size > MaxFileSize {
-		return fmt.Errorf("file size exceeds maximum allowed size of %d MB", MaxFileSize/(1024*1024))
+	if err := validate(header, "file", MaxFileSize, AllowedFileTypes); err != nil {
+		if !isAllowedExtension(getFileExtension(header.Filename), AllowedFileTypes) {
+			return UnsupportedTypeError(header.Filename)
+		}
+		return err
 	}
-
-	// Check file extension
-	ext := getFileExtension(header.Filename)
-	if !isAllowedExtension(ext, AllowedFileTypes) {
-		return fmt.Errorf("invalid file type: %s. Allowed types: %s", ext, strings.Join(AllowedFileTypes, ", "))
-	}
-
 	return nil
 }
 
-// getFileExtension returns the lowercase file extension including the dot
+func validate(header *multipart.FileHeader, kind string, maxSize int64, allowed []string) error {
+	ext := getFileExtension(header.Filename)
+	if !isAllowedExtension(ext, allowed) {
+		if ext == "" {
+			return fmt.Errorf("This %s has no file extension. Supported types: %s", kind, listTypes(allowed))
+		}
+		return fmt.Errorf("%s isn't a supported %s type. Supported types: %s", ext, kind, listTypes(allowed))
+	}
+	if header.Size == 0 {
+		return fmt.Errorf("This %s is empty", kind)
+	}
+	if header.Size > maxSize {
+		return fmt.Errorf("This %s is %s. The maximum is %d MB", kind, humanSize(header.Size), maxSize/(1024*1024))
+	}
+	return nil
+}
+
+// UnsupportedTypeError explains which kinds of files can be uploaded at all
+func UnsupportedTypeError(filename string) error {
+	ext := getFileExtension(filename)
+	what := ext + " files"
+	if ext == "" {
+		what = "Files without an extension"
+	}
+	return fmt.Errorf("%s can't be uploaded. Supported: images (%s), audio (%s) and documents (%s)",
+		what, listTypes(AllowedImageTypes), listTypes(AllowedAudioTypes), listTypes(AllowedFileTypes))
+}
+
+func listTypes(types []string) string {
+	out := make([]string, len(types))
+	for i, t := range types {
+		out[i] = strings.TrimPrefix(t, ".")
+	}
+	return strings.Join(out, ", ")
+}
+
+func humanSize(n int64) string {
+	const mb = 1024 * 1024
+	if n >= mb {
+		return fmt.Sprintf("%.1f MB", float64(n)/mb)
+	}
+	return fmt.Sprintf("%d KB", (n+1023)/1024)
+}
+
+// CheckDocumentContent makes sure a document really is what its extension says, by looking at
+// its first bytes: a renamed executable or web page can't be uploaded as ".pdf" or ".txt" and
+// then served from our storage. Images and audio are checked by Cloudinary itself.
+func CheckDocumentContent(f io.ReadSeeker, filename string) error {
+	ext := getFileExtension(filename)
+	head := make([]byte, 8192)
+	n, err := io.ReadFull(f, head)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		return errors.New("We couldn't read this file. Please try again")
+	}
+	head = head[:n]
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return errors.New("We couldn't read this file. Please try again")
+	}
+
+	ok := true
+	switch ext {
+	case ".pdf":
+		ok = bytes.HasPrefix(head, []byte("%PDF-"))
+	case ".docx", ".epub":
+		ok = bytes.HasPrefix(head, []byte("PK\x03\x04")) // zip container
+	case ".doc":
+		ok = bytes.HasPrefix(head, []byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}) // OLE2
+	case ".txt":
+		ok = utf8.Valid(trimPartialRune(head)) && !bytes.ContainsRune(head, 0) && !looksLikeHTML(head)
+	}
+	if !ok {
+		return fmt.Errorf("This file's contents don't match its %s extension. Please upload the original file", ext)
+	}
+	return nil
+}
+
+// trimPartialRune drops a multi-byte character cut off at the end of the sniffed bytes
+func trimPartialRune(b []byte) []byte {
+	for i := 0; i < utf8.UTFMax && len(b) > 0; i++ {
+		if utf8.Valid(b) {
+			return b
+		}
+		b = b[:len(b)-1]
+	}
+	return b
+}
+
+func looksLikeHTML(b []byte) bool {
+	s := strings.ToLower(strings.TrimSpace(string(b[:min(len(b), 512)])))
+	for _, p := range []string{"<!doctype html", "<html", "<script", "<svg", "<?xml"} {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
+}
+
 func getFileExtension(filename string) string {
 	ext := filepath.Ext(filename)
 	return strings.ToLower(ext)

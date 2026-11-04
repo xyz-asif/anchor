@@ -16,13 +16,13 @@ type Like struct {
 
 // LikeActionRequest for POST /anchors/:id/like
 type LikeActionRequest struct {
-	Action string `json:"action" binding:"required,oneof=like unlike"`
+	Action string `json:"action"` // "like" or "unlike" (checked by ValidateLikeActionRequest)
 }
 
 // LikeListQuery for GET /anchors/:id/likes
 type LikeListQuery struct {
-	Page  int `form:"page,default=1" binding:"min=1"`
-	Limit int `form:"limit,default=20" binding:"min=1,max=50"`
+	Page  int
+	Limit int
 }
 
 // LikeActionResponse after like/unlike

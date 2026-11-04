@@ -3,13 +3,22 @@ package anchors
 import (
 	"context"
 	"errors"
+	"log"
 	"strings"
 	"time"
 
+	"github.com/xyz-asif/gotodo/internal/pkg/searchterms"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+)
+
+// ErrAnchorNotFound / ErrItemNotFound mean the document doesn't exist; any other error means
+// the lookup itself failed (and must not be reported to the client as "not found")
+var (
+	ErrAnchorNotFound = errors.New("anchor not found")
+	ErrItemNotFound   = errors.New("item not found")
 )
 
 // Repository handles database interactions for the anchors feature
@@ -62,6 +71,10 @@ func NewRepository(db *mongo.Database) *Repository {
 			},
 		},
 		{
+			// Prefix-word index for search (see pkg/searchterms)
+			Keys: bson.D{{Key: "search.terms", Value: 1}},
+		},
+		{
 			// Text index for search
 			Keys: bson.D{
 				{Key: "title", Value: "text"},
@@ -100,6 +113,7 @@ func (r *Repository) CreateAnchor(ctx context.Context, anchor *Anchor) error {
 	anchor.CreatedAt = time.Now()
 	anchor.UpdatedAt = time.Now()
 	anchor.LastItemAddedAt = time.Now()
+	anchor.Search = searchterms.ForAnchor(anchor.Title, anchor.Description, anchor.Tags)
 
 	result, err := r.anchorsCollection.InsertOne(ctx, anchor)
 	if err != nil {
@@ -119,7 +133,7 @@ func (r *Repository) GetAnchorByID(ctx context.Context, anchorID primitive.Objec
 	err := r.anchorsCollection.FindOne(ctx, bson.M{"_id": anchorID}).Decode(&anchor)
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
-			return nil, errors.New("anchor not found")
+			return nil, ErrAnchorNotFound
 		}
 		return nil, err
 	}
@@ -135,8 +149,8 @@ func (r *Repository) GetUserAnchors(ctx context.Context, userID primitive.Object
 	}
 
 	opts := options.Find().
-		SetSort(bson.D{{Key: "lastItemAddedAt", Value: -1}}).
-		SetSkip(int64((page - 1) * limit)).
+		SetSort(bson.D{{Key: "lastItemAddedAt", Value: -1}, {Key: "_id", Value: -1}}).
+		SetSkip(int64(page-1) * int64(limit)).
 		SetLimit(int64(limit))
 
 	cursor, err := r.anchorsCollection.Find(ctx, filter, opts)
@@ -168,8 +182,8 @@ func (r *Repository) GetPublicUserAnchors(ctx context.Context, userID primitive.
 	}
 
 	opts := options.Find().
-		SetSort(bson.D{{Key: "lastItemAddedAt", Value: -1}}).
-		SetSkip(int64((page - 1) * limit)).
+		SetSort(bson.D{{Key: "lastItemAddedAt", Value: -1}, {Key: "_id", Value: -1}}).
+		SetSkip(int64(page-1) * int64(limit)).
 		SetLimit(int64(limit))
 
 	cursor, err := r.anchorsCollection.Find(ctx, filter, opts)
@@ -214,45 +228,100 @@ func (r *Repository) UpdateAnchor(ctx context.Context, anchorID primitive.Object
 		return errors.New("anchor not found")
 	}
 
+	if touchesSearchFields(update) {
+		if err := r.RefreshAnchorSearch(ctx, anchorID); err != nil {
+			log.Printf("anchors: refreshing search terms of %s failed: %v", anchorID.Hex(), err)
+		}
+	}
 	return nil
 }
 
-// SoftDeleteAnchor marks an anchor as deleted
-func (r *Repository) SoftDeleteAnchor(ctx context.Context, anchorID primitive.ObjectID) error {
-	now := time.Now()
-	filter := bson.M{"_id": anchorID}
-	update := bson.M{
-		"$set": bson.M{
-			"deletedAt": now,
-			"updatedAt": now,
-		},
+// touchesSearchFields reports whether an update changes text that search indexes
+func touchesSearchFields(update bson.M) bool {
+	for _, op := range update {
+		if fields, ok := op.(bson.M); ok {
+			for _, f := range []string{"title", "description", "tags"} {
+				if _, ok := fields[f]; ok {
+					return true
+				}
+			}
+		}
 	}
+	return false
+}
 
-	result, err := r.anchorsCollection.UpdateOne(ctx, filter, update)
+// RefreshAnchorSearch recomputes an anchor's search terms from its current text. The write only
+// applies if the text is still what was read, so a slower refresh can never overwrite the
+// terms of a newer edit with stale ones.
+func (r *Repository) RefreshAnchorSearch(ctx context.Context, anchorID primitive.ObjectID) error {
+	var doc bson.M
+	err := r.anchorsCollection.FindOne(ctx, bson.M{"_id": anchorID},
+		options.FindOne().SetProjection(bson.M{"title": 1, "description": 1, "tags": 1})).Decode(&doc)
 	if err != nil {
 		return err
 	}
-
-	if result.MatchedCount == 0 {
-		return errors.New("anchor not found")
+	var current struct {
+		Title       string   `bson:"title"`
+		Description string   `bson:"description"`
+		Tags        []string `bson:"tags"`
 	}
+	raw, _ := bson.Marshal(doc)
+	if err := bson.Unmarshal(raw, &current); err != nil {
+		return err
+	}
+	_, err = r.anchorsCollection.UpdateOne(ctx,
+		bson.M{"_id": anchorID, "title": doc["title"], "description": doc["description"], "tags": doc["tags"]},
+		bson.M{"$set": bson.M{"search": searchterms.ForAnchor(current.Title, current.Description, current.Tags)}})
+	return err
+}
 
+// SoftDeleteAnchor marks an anchor as deleted (and unpins it). Only one caller can delete an
+// anchor: a second, concurrent delete gets ErrAnchorNotFound, so counters are adjusted once.
+func (r *Repository) SoftDeleteAnchor(ctx context.Context, anchorID primitive.ObjectID) error {
+	now := time.Now()
+	result, err := r.anchorsCollection.UpdateOne(ctx,
+		bson.M{"_id": anchorID, "deletedAt": nil},
+		bson.M{"$set": bson.M{"deletedAt": now, "updatedAt": now, "isPinned": false}},
+	)
+	if err != nil {
+		return err
+	}
+	if result.MatchedCount == 0 {
+		return ErrAnchorNotFound
+	}
 	return nil
 }
 
-// CountUserAnchors counts the total number of non-deleted anchors for a user
-func (r *Repository) CountUserAnchors(ctx context.Context, userID string) (int64, error) {
-	filter := bson.M{
-		"userId":    userID,
-		"deletedAt": nil,
-	}
-
-	count, err := r.anchorsCollection.CountDocuments(ctx, filter)
+// SetPinned changes isPinned from `from` to `to` atomically. changed is false when the anchor
+// was not in the `from` state (e.g. a concurrent request already toggled it).
+func (r *Repository) SetPinned(ctx context.Context, anchorID primitive.ObjectID, from, to bool) (changed bool, err error) {
+	result, err := r.anchorsCollection.UpdateOne(ctx,
+		bson.M{"_id": anchorID, "deletedAt": nil, "isPinned": from},
+		bson.M{"$set": bson.M{"isPinned": to, "updatedAt": time.Now()}},
+	)
 	if err != nil {
-		return 0, err
+		return false, err
 	}
+	return result.ModifiedCount > 0, nil
+}
 
-	return count, nil
+// ItemIDs returns the IDs of all items in an anchor
+func (r *Repository) ItemIDs(ctx context.Context, anchorID primitive.ObjectID) (map[primitive.ObjectID]bool, error) {
+	cursor, err := r.itemsCollection.Find(ctx, bson.M{"anchorId": anchorID}, options.Find().SetProjection(bson.M{"_id": 1}))
+	if err != nil {
+		return nil, err
+	}
+	var docs []struct {
+		ID primitive.ObjectID `bson:"_id"`
+	}
+	if err := cursor.All(ctx, &docs); err != nil {
+		return nil, err
+	}
+	ids := make(map[primitive.ObjectID]bool, len(docs))
+	for _, d := range docs {
+		ids[d.ID] = true
+	}
+	return ids, nil
 }
 
 // CountPinnedAnchors counts the number of pinned anchors for a user
@@ -300,7 +369,7 @@ func (r *Repository) CreateItems(ctx context.Context, items []interface{}) error
 // GetAnchorItems retrieves all items for a specific anchor, ordered by position
 func (r *Repository) GetAnchorItems(ctx context.Context, anchorID primitive.ObjectID) ([]Item, error) {
 	filter := bson.M{"anchorId": anchorID}
-	cursor, err := r.itemsCollection.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "position", Value: 1}}))
+	cursor, err := r.itemsCollection.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "position", Value: 1}, {Key: "_id", Value: 1}}))
 	if err != nil {
 		return nil, err
 	}
@@ -319,8 +388,8 @@ func (r *Repository) GetAnchorItemsPaginated(ctx context.Context, anchorID primi
 	filter := bson.M{"anchorId": anchorID}
 
 	opts := options.Find().
-		SetSort(bson.D{{Key: "position", Value: 1}}).
-		SetSkip(int64((page - 1) * limit)).
+		SetSort(bson.D{{Key: "position", Value: 1}, {Key: "_id", Value: 1}}).
+		SetSkip(int64(page-1) * int64(limit)).
 		SetLimit(int64(limit))
 
 	cursor, err := r.itemsCollection.Find(ctx, filter, opts)
@@ -348,7 +417,7 @@ func (r *Repository) GetItemByID(ctx context.Context, itemID primitive.ObjectID)
 	err := r.itemsCollection.FindOne(ctx, bson.M{"_id": itemID}).Decode(&item)
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
-			return nil, errors.New("item not found")
+			return nil, ErrItemNotFound
 		}
 		return nil, err
 	}
@@ -420,29 +489,18 @@ func (r *Repository) CountAnchorItems(ctx context.Context, anchorID primitive.Ob
 	return count, nil
 }
 
-// IncrementLikeCount increments or decrements an anchor's like count
+// IncrementLikeCount atomically adjusts an anchor's like count. A decrement only applies while
+// the count is at least that high, so it can never go negative (not even briefly).
 func (r *Repository) IncrementLikeCount(ctx context.Context, anchorID primitive.ObjectID, delta int) error {
 	filter := bson.M{"_id": anchorID}
-	update := bson.M{
+	if delta < 0 {
+		filter["likeCount"] = bson.M{"$gte": -delta}
+	}
+	_, err := r.anchorsCollection.UpdateOne(ctx, filter, bson.M{
 		"$inc": bson.M{"likeCount": delta},
 		"$set": bson.M{"updatedAt": time.Now()},
-	}
-
-	_, err := r.anchorsCollection.UpdateOne(ctx, filter, update)
-	if err != nil {
-		return err
-	}
-
-	// If decrementing, ensure count doesn't go negative
-	if delta < 0 {
-		// Fix negative count if it occurred
-		_, _ = r.anchorsCollection.UpdateOne(ctx,
-			bson.M{"_id": anchorID, "likeCount": bson.M{"$lt": 0}},
-			bson.M{"$set": bson.M{"likeCount": 0}},
-		)
-	}
-
-	return nil
+	})
+	return err
 }
 
 // GetPinnedAnchors retrieves pinned anchors for a specific user
@@ -498,28 +556,18 @@ func (r *Repository) UpdateEngagementScore(ctx context.Context, anchorID primiti
 	return nil
 }
 
-// IncrementCommentCount increments/decrements anchor's comment count
+// IncrementCommentCount atomically adjusts an anchor's comment count; a decrement only applies
+// while the count is at least that high, so it never goes negative (not even briefly).
 func (r *Repository) IncrementCommentCount(ctx context.Context, anchorID primitive.ObjectID, delta int) error {
 	filter := bson.M{"_id": anchorID}
-	update := bson.M{
+	if delta < 0 {
+		filter["commentCount"] = bson.M{"$gte": -delta}
+	}
+	_, err := r.anchorsCollection.UpdateOne(ctx, filter, bson.M{
 		"$inc": bson.M{"commentCount": delta},
 		"$set": bson.M{"updatedAt": time.Now()},
-	}
-
-	_, err := r.anchorsCollection.UpdateOne(ctx, filter, update)
-	if err != nil {
-		return err
-	}
-
-	// Ensure count doesn't go negative
-	if delta < 0 {
-		_, _ = r.anchorsCollection.UpdateOne(ctx,
-			bson.M{"_id": anchorID, "commentCount": bson.M{"$lt": 0}},
-			bson.M{"$set": bson.M{"commentCount": 0}},
-		)
-	}
-
-	return nil
+	})
+	return err
 }
 
 // GetAnchorTitles batch fetches titles for a list of anchor IDs
@@ -605,8 +653,8 @@ func (r *Repository) GetUserClonedAnchors(ctx context.Context, userID primitive.
 	}
 
 	opts := options.Find().
-		SetSort(bson.D{{Key: "createdAt", Value: -1}}).
-		SetSkip(int64((page - 1) * limit)).
+		SetSort(bson.D{{Key: "createdAt", Value: -1}, {Key: "_id", Value: -1}}).
+		SetSkip(int64(page-1) * int64(limit)).
 		SetLimit(int64(limit))
 
 	cursor, err := r.anchorsCollection.Find(ctx, filter, opts)
@@ -624,12 +672,16 @@ func (r *Repository) GetUserClonedAnchors(ctx context.Context, userID primitive.
 }
 
 // GetAnchorClones returns clones of an anchor
-func (r *Repository) GetAnchorClones(ctx context.Context, originalAnchorID primitive.ObjectID, page, limit int) ([]Anchor, int64, error) {
+// Clones by users in hiddenCloners (block relationships with the viewer) are left out.
+func (r *Repository) GetAnchorClones(ctx context.Context, originalAnchorID primitive.ObjectID, hiddenCloners []primitive.ObjectID, page, limit int) ([]Anchor, int64, error) {
 	// Only public clones are listed (private and unlisted ones are not)
 	filter := bson.M{
 		"clonedFromAnchorId": originalAnchorID,
 		"visibility":         VisibilityPublic,
 		"deletedAt":          nil,
+	}
+	if len(hiddenCloners) > 0 {
+		filter["userId"] = bson.M{"$nin": hiddenCloners}
 	}
 
 	total, err := r.anchorsCollection.CountDocuments(ctx, filter)
@@ -638,8 +690,8 @@ func (r *Repository) GetAnchorClones(ctx context.Context, originalAnchorID primi
 	}
 
 	opts := options.Find().
-		SetSort(bson.D{{Key: "createdAt", Value: -1}}).
-		SetSkip(int64((page - 1) * limit)).
+		SetSort(bson.D{{Key: "createdAt", Value: -1}, {Key: "_id", Value: -1}}).
+		SetSkip(int64(page-1) * int64(limit)).
 		SetLimit(int64(limit))
 
 	cursor, err := r.anchorsCollection.Find(ctx, filter, opts)

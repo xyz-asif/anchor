@@ -2,6 +2,7 @@ package feed
 
 import (
 	"context"
+	"log"
 
 	"github.com/xyz-asif/gotodo/internal/features/anchor_follows"
 	"github.com/xyz-asif/gotodo/internal/features/anchors"
@@ -39,105 +40,65 @@ func NewService(
 	}
 }
 
+// hiddenAuthors returns the users whose anchors the viewer must not see in feeds: users the
+// viewer blocked or muted, and users who blocked the viewer. A lookup failure is an error, so
+// a feed never shows blocked people because a query failed.
+func (s *Service) hiddenAuthors(ctx context.Context, viewer *auth.User) (blocked, hidden []primitive.ObjectID, err error) {
+	blocked, err = s.authRepo.HiddenUserIDs(ctx, viewer)
+	if err != nil {
+		return nil, nil, err
+	}
+	hidden = append(append([]primitive.ObjectID{}, blocked...), viewer.MutedUsers...)
+	return blocked, hidden, nil
+}
+
 func (s *Service) GetHomeFeed(
 	ctx context.Context,
-	userID primitive.ObjectID,
+	viewer *auth.User,
 	query *FeedQuery,
 ) (*HomeFeedResponse, error) {
-	// 1. Decode Cursor
-	cursor, err := DecodeCursor(query.Cursor)
-	if err != nil {
-		return nil, err
-	}
+	userID := viewer.ID
+	cursor := query.Cursor
+	includeOwn := query.IncludeOwn
 
-	// 2. Get Following List
 	followingIDs, err := s.followsRepo.GetAllFollowingIDs(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-
-	// 3. Handle Own Anchors
-	includeOwn := true
-	if query.IncludeOwn != nil {
-		includeOwn = *query.IncludeOwn
-	}
-
-	feedUserIDs := followingIDs
-	if includeOwn {
-		feedUserIDs = append(feedUserIDs, userID)
-	}
-
-	// Initialize enrichment sections for first page only
-	var followingAnchors FollowingAnchorsSection
-	var suggestedCategories []SuggestedCategory
-
-	if cursor == nil {
-		followingAnchors, _ = s.getFollowingAnchorsForFeed(ctx, userID)
-		suggestedCategories, _ = s.getSuggestedCategories(ctx)
-	}
-
-	// 4. Check for empty connection
-	if len(feedUserIDs) == 0 {
-		reason := "NO_FOLLOWING"
-		return &HomeFeedResponse{
-			FollowingAnchors:    followingAnchors,
-			SuggestedCategories: suggestedCategories,
-			Feed: FeedResponse{
-				Items: []FeedItem{},
-				Pagination: FeedPagination{
-					Limit: query.Limit,
-				},
-				Meta: FeedMeta{
-					FeedType:           "following",
-					IncludesOwnAnchors: includeOwn,
-					TotalFollowing:     0,
-					EmptyReason:        &reason,
-				},
-			},
-		}, nil
-	}
-
-	// 5. Query Anchors, without blocked or muted authors
-	var excludedUserIDs []primitive.ObjectID
-	currentUser, err := s.authRepo.GetUserByObjectID(ctx, userID)
-	if err == nil && currentUser != nil {
-		excludedUserIDs = append(append(excludedUserIDs, currentUser.BlockedUsers...), currentUser.MutedUsers...)
-	}
-
-	anchorsList, err := s.feedRepo.GetFeedAnchors(ctx, feedUserIDs, excludedUserIDs, cursor, query.Limit+1)
+	blockedIDs, hiddenIDs, err := s.hiddenAuthors(ctx, viewer)
 	if err != nil {
 		return nil, err
 	}
 
-	// 6. Check HasMore
-	hasMore := false
-	if len(anchorsList) > query.Limit {
-		hasMore = true
-		anchorsList = anchorsList[:query.Limit]
+	feedUserIDs := append([]primitive.ObjectID{}, followingIDs...)
+	if includeOwn {
+		feedUserIDs = append(feedUserIDs, userID)
 	}
 
-	// 7. Handle Empty Results
-	if len(anchorsList) == 0 {
-		reason := "END_OF_FEED"
-		if cursor == nil {
-			if len(followingIDs) == 0 && !includeOwn {
-				reason = "NO_FOLLOWING"
-			} else {
-				reason = "NO_CONTENT"
-			}
+	// The extra sections only come with the first page; they are best effort, so a failure
+	// there still returns the feed itself
+	followingAnchors := FollowingAnchorsSection{Items: []FollowingAnchorFeedItem{}}
+	suggestedCategories := []SuggestedCategory{}
+	if cursor == nil {
+		if section, err := s.getFollowingAnchorsForFeed(ctx, userID, blockedIDs); err != nil {
+			log.Printf("feed: followed anchors for %s failed: %v", userID.Hex(), err)
+		} else {
+			followingAnchors = section
 		}
+		if categories, err := s.getSuggestedCategories(ctx); err != nil {
+			log.Printf("feed: suggested categories failed: %v", err)
+		} else {
+			suggestedCategories = categories
+		}
+	}
 
+	emptyFeed := func(reason string) *HomeFeedResponse {
 		return &HomeFeedResponse{
 			FollowingAnchors:    followingAnchors,
 			SuggestedCategories: suggestedCategories,
 			Feed: FeedResponse{
-				Items: []FeedItem{},
-				Pagination: FeedPagination{
-					Limit:      query.Limit,
-					HasMore:    false,
-					NextCursor: nil,
-					ItemCount:  0,
-				},
+				Items:      []FeedItem{},
+				Pagination: FeedPagination{Limit: query.Limit},
 				Meta: FeedMeta{
 					FeedType:           "following",
 					IncludesOwnAnchors: includeOwn,
@@ -145,50 +106,68 @@ func (s *Service) GetHomeFeed(
 					EmptyReason:        &reason,
 				},
 			},
-		}, nil
-	}
-
-	// 8. Enrich Authors
-	anchorAuthorIDs := make([]primitive.ObjectID, len(anchorsList))
-	for i, a := range anchorsList {
-		anchorAuthorIDs[i] = a.UserID
-	}
-	authorsMap, err := s.enrichWithAuthors(ctx, anchorAuthorIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	// 9. Enrich Engagement
-	engagementMap, err := s.enrichWithEngagement(ctx, anchorsList, userID, followingIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	// 10. Enrich Previews
-	anchorIDs := make([]primitive.ObjectID, len(anchorsList))
-	for i, a := range anchorsList {
-		anchorIDs[i] = a.ID
-	}
-	previewsMap, err := s.getPreviewsForAnchors(ctx, anchorIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	// 11. Build Response Items
-	feedItems := make([]FeedItem, len(anchorsList))
-	for i, anchor := range anchorsList {
-		author, ok := authorsMap[anchor.UserID]
-		if !ok {
-			author = &FeedItemAuthor{ID: anchor.UserID, Username: "Deleted User"}
 		}
+	}
 
-		engagement := engagementMap[anchor.ID]
+	if len(feedUserIDs) == 0 {
+		return emptyFeed("NO_FOLLOWING"), nil
+	}
+
+	// Blocked and muted authors are dropped in the query, so pages stay full
+	anchorsList, err := s.feedRepo.GetFeedAnchors(ctx, feedUserIDs, hiddenIDs, cursor, query.Limit+1)
+	if err != nil {
+		return nil, err
+	}
+
+	hasMore := false
+	if len(anchorsList) > query.Limit {
+		hasMore = true
+		anchorsList = anchorsList[:query.Limit]
+	}
+
+	if len(anchorsList) == 0 {
+		switch {
+		case cursor != nil:
+			return emptyFeed("END_OF_FEED"), nil
+		case len(followingIDs) == 0:
+			return emptyFeed("NO_FOLLOWING"), nil
+		default:
+			return emptyFeed("NO_CONTENT"), nil
+		}
+	}
+
+	// The cursor comes from the last anchor of the query, before anything is dropped below
+	var nextCursor *string
+	if hasMore {
+		lastAnchor := anchorsList[len(anchorsList)-1]
+		c := EncodeCursor(lastAnchor.LastItemAddedAt, lastAnchor.ID)
+		nextCursor = &c
+	}
+
+	users, err := s.loadUsers(ctx, authorIDsOf(anchorsList))
+	if err != nil {
+		return nil, err
+	}
+	engagementMap, err := s.enrichWithEngagement(ctx, anchorsList, viewer, followingIDs, hiddenIDs)
+	if err != nil {
+		return nil, err
+	}
+	previewsMap, err := s.getPreviewsForAnchors(ctx, anchorIDsOf(anchorsList))
+	if err != nil {
+		return nil, err
+	}
+
+	feedItems := make([]FeedItem, 0, len(anchorsList))
+	for _, anchor := range anchorsList {
+		author, ok := users[anchor.UserID]
+		if !ok {
+			continue // the author's account is being deleted
+		}
 		preview := previewsMap[anchor.ID]
 		if preview == nil {
 			preview = &FeedPreview{Items: []FeedPreviewItem{}}
 		}
-
-		feedItems[i] = FeedItem{
+		feedItems = append(feedItems, FeedItem{
 			ID:              anchor.ID,
 			Title:           anchor.Title,
 			Description:     anchor.Description,
@@ -196,25 +175,23 @@ func (s *Service) GetHomeFeed(
 			CoverMediaValue: anchor.CoverMediaValue,
 			Visibility:      anchor.Visibility,
 			IsPinned:        anchor.IsPinned,
-			Tags:            anchor.Tags,
+			Tags:            nonNilTags(anchor.Tags),
 			ItemCount:       anchor.ItemCount,
 			LikeCount:       anchor.LikeCount,
 			CloneCount:      anchor.CloneCount,
 			CommentCount:    anchor.CommentCount,
 			LastItemAddedAt: anchor.LastItemAddedAt,
 			CreatedAt:       anchor.CreatedAt,
-			Author:          *author,
-			Engagement:      *engagement,
-			Preview:         *preview,
-		}
-	}
-
-	// 12. Build Next Cursor
-	var nextCursor *string
-	if hasMore {
-		lastAnchor := anchorsList[len(anchorsList)-1]
-		c := EncodeCursor(lastAnchor.LastItemAddedAt, lastAnchor.ID)
-		nextCursor = &c
+			Author: FeedItemAuthor{
+				ID:             author.ID,
+				Username:       author.Username,
+				DisplayName:    author.DisplayName,
+				ProfilePicture: optionalString(author.ProfilePictureURL),
+				IsVerified:     author.IsVerified,
+			},
+			Engagement: *engagementMap[anchor.ID],
+			Preview:    *preview,
+		})
 	}
 
 	return &HomeFeedResponse{
@@ -238,152 +215,105 @@ func (s *Service) GetHomeFeed(
 	}, nil
 }
 
-func (s *Service) getFollowingAnchorsForFeed(ctx context.Context, userID primitive.ObjectID) (FollowingAnchorsSection, error) {
-	// 1. Get user follows (limit 10 for feed section)
-	follows, total, err := s.anchorFollowsRepo.GetUserFollowingAnchors(ctx, userID, 1, 10)
+// getFollowingAnchorsForFeed returns the 10 followed anchors updated most recently. Deleted
+// anchors, anchors that went private and anchors by blocked owners are excluded in the query,
+// so the section is full and the total is exact.
+func (s *Service) getFollowingAnchorsForFeed(ctx context.Context, userID primitive.ObjectID, blockedIDs []primitive.ObjectID) (FollowingAnchorsSection, error) {
+	rows, total, _, err := s.anchorFollowsRepo.ListFollowing(ctx, userID, anchor_follows.FollowingListOptions{
+		Sort:        anchor_follows.SortUpdated,
+		HiddenUsers: blockedIDs,
+		Page:        1,
+		Limit:       10,
+	})
 	if err != nil {
-		return FollowingAnchorsSection{Items: []FollowingAnchorFeedItem{}}, err
+		return FollowingAnchorsSection{}, err
 	}
 
-	if len(follows) == 0 {
-		return FollowingAnchorsSection{Items: []FollowingAnchorFeedItem{}}, nil
-	}
-
-	// 2. Get anchor details for these follows
-	anchorIDs := make([]primitive.ObjectID, len(follows))
-	for i, f := range follows {
-		anchorIDs[i] = f.AnchorID
-	}
-
-	anchorsList, err := s.anchorsRepo.GetAnchorsByIDs(ctx, anchorIDs)
-	if err != nil {
-		return FollowingAnchorsSection{Items: []FollowingAnchorFeedItem{}}, err
-	}
-
-	// 3. Build map for quick lookup
-	anchorMap := make(map[primitive.ObjectID]anchors.Anchor)
-	for _, a := range anchorsList {
-		anchorMap[a.ID] = a
-	}
-
-	// 4. Build return items
-	items := make([]FollowingAnchorFeedItem, 0)
-	for _, f := range follows {
-		a, ok := anchorMap[f.AnchorID]
-		// Skip anchors that were deleted or made private by their owner after being followed
-		if !ok || a.DeletedAt != nil || (a.Visibility == anchors.VisibilityPrivate && a.UserID != userID) {
-			continue
-		}
-
+	items := make([]FollowingAnchorFeedItem, 0, len(rows))
+	for _, row := range rows {
+		a := row.Anchor
 		items = append(items, FollowingAnchorFeedItem{
 			ID:              a.ID,
 			Title:           a.Title,
 			CoverMediaType:  a.CoverMediaType,
 			CoverMediaValue: a.CoverMediaValue,
-			HasUpdate:       a.Version > f.LastSeenVersion,
-			LastSeenVersion: f.LastSeenVersion,
+			HasUpdate:       a.Version > row.Follow.LastSeenVersion,
+			LastSeenVersion: row.Follow.LastSeenVersion,
 			CurrentVersion:  a.Version,
 		})
 	}
-
-	return FollowingAnchorsSection{
-		Items:      items,
-		TotalCount: int(total),
-	}, nil
+	return FollowingAnchorsSection{Items: items, TotalCount: int(total)}, nil
 }
 
 func (s *Service) getSuggestedCategories(ctx context.Context) ([]SuggestedCategory, error) {
-	// For now, return popular tags from public anchors
-	tags, err := s.anchorsRepo.GetPopularTags(ctx, 10)
+	popular, err := s.anchorsRepo.GetPopularTags(ctx, 10)
 	if err != nil {
-		return []SuggestedCategory{}, err
+		return nil, err
 	}
-
-	results := make([]SuggestedCategory, len(tags))
-	for i, t := range tags {
-		results[i] = SuggestedCategory{
-			Name:        t.Name,
-			AnchorCount: t.Count,
-		}
+	results := make([]SuggestedCategory, len(popular))
+	for i, t := range popular {
+		results[i] = SuggestedCategory{Name: t.Name, AnchorCount: t.Count}
 	}
-
 	return results, nil
 }
 
-func (s *Service) enrichWithAuthors(ctx context.Context, userIDs []primitive.ObjectID) (map[primitive.ObjectID]*FeedItemAuthor, error) {
-	// Deduplicate IDs
-	uniqueIDs := make(map[primitive.ObjectID]bool)
-	var ids []primitive.ObjectID
+// loadUsers fetches the given users (deduplicated), keyed by ID
+func (s *Service) loadUsers(ctx context.Context, userIDs []primitive.ObjectID) (map[primitive.ObjectID]*auth.User, error) {
+	seen := make(map[primitive.ObjectID]bool, len(userIDs))
+	ids := make([]primitive.ObjectID, 0, len(userIDs))
 	for _, id := range userIDs {
-		if !uniqueIDs[id] {
-			uniqueIDs[id] = true
+		if !seen[id] {
+			seen[id] = true
 			ids = append(ids, id)
 		}
 	}
-
 	users, err := s.authRepo.GetUsersByIDs(ctx, ids)
 	if err != nil {
 		return nil, err
 	}
-
-	authorMap := make(map[primitive.ObjectID]*FeedItemAuthor)
-	for _, user := range users {
-		authorMap[user.ID] = &FeedItemAuthor{
-			ID:             user.ID,
-			Username:       user.Username,
-			DisplayName:    user.DisplayName,
-			ProfilePicture: &user.ProfilePictureURL,
-			IsVerified:     user.IsVerified,
-		}
+	byID := make(map[primitive.ObjectID]*auth.User, len(users))
+	for i := range users {
+		byID[users[i].ID] = &users[i]
 	}
-	return authorMap, nil
+	return byID, nil
 }
 
+// enrichWithEngagement adds the viewer's like/clone state and the like summary to every anchor
+// on the page, with a fixed number of queries (no per-anchor queries). viewer may be nil.
 func (s *Service) enrichWithEngagement(
 	ctx context.Context,
 	anchorsList []anchors.Anchor,
-	userID primitive.ObjectID,
+	viewer *auth.User,
 	followingIDs []primitive.ObjectID,
+	hiddenIDs []primitive.ObjectID,
 ) (map[primitive.ObjectID]*FeedEngagement, error) {
-	anchorIDs := make([]primitive.ObjectID, len(anchorsList))
-	for i, a := range anchorsList {
-		anchorIDs[i] = a.ID
-	}
+	anchorIDs := anchorIDsOf(anchorsList)
 
-	// Batch get liked status
-	likedMap, err := s.likesRepo.GetUserLikedAnchors(ctx, userID, anchorIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	// Batch get cloned status
-	clonedMap, err := s.feedRepo.GetUserClonedAnchors(ctx, userID, anchorIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	engagementMap := make(map[primitive.ObjectID]*FeedEngagement)
-
-	// We can't batch get like summaries easily as it's top likers per anchor
-	// For now, we'll do it in a loop or optimize later.
-	// Given typical page size is 20, 20 parallel/sequential queries is acceptable for now.
-	// To optimize, likes repo would need a "GetRecentLikersForAnchors" aggregation.
-	// We'll proceed with sequential for simplicity as specified in algorithm step 7g.
-
-	for _, a := range anchorsList {
-		likeSummary, err := s.getLikeSummary(ctx, a.ID, a.LikeCount, followingIDs)
-		if err != nil {
-			// Log error but continue? For now return error
+	likedMap := map[primitive.ObjectID]bool{}
+	clonedMap := map[primitive.ObjectID]bool{}
+	if viewer != nil {
+		var err error
+		if likedMap, err = s.likesRepo.GetUserLikedAnchors(ctx, viewer.ID, anchorIDs); err != nil {
 			return nil, err
 		}
+		if clonedMap, err = s.feedRepo.GetUserClonedAnchors(ctx, viewer.ID, anchorIDs); err != nil {
+			return nil, err
+		}
+	}
 
+	summaries, err := s.getLikeSummaries(ctx, anchorsList, followingIDs, hiddenIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	engagementMap := make(map[primitive.ObjectID]*FeedEngagement, len(anchorsList))
+	for _, a := range anchorsList {
 		engagementMap[a.ID] = &FeedEngagement{
 			HasLiked:    likedMap[a.ID],
 			HasCloned:   clonedMap[a.ID],
-			LikeSummary: *likeSummary,
+			LikeSummary: summaries[a.ID],
 		}
 	}
-
 	return engagementMap, nil
 }
 
@@ -430,134 +360,113 @@ func (s *Service) getPreviewsForAnchors(ctx context.Context, anchorIDs []primiti
 	return previewMap, nil
 }
 
-func (s *Service) getLikeSummary(
+// getLikeSummaries builds "liked by <people you follow> and N others" for every anchor on the
+// page: up to 3 followed users per anchor (newest like first), found among *all* the anchor's
+// likes in a single query. Blocked and muted users are never named.
+func (s *Service) getLikeSummaries(
 	ctx context.Context,
-	anchorID primitive.ObjectID,
-	totalCount int,
+	anchorsList []anchors.Anchor,
 	followingIDs []primitive.ObjectID,
-) (*FeedLikeSummary, error) {
-	// Get recent likers (limit 20 to find matches)
-	likers, err := s.likesRepo.GetRecentLikers(ctx, anchorID, 20)
+	hiddenIDs []primitive.ObjectID,
+) (map[primitive.ObjectID]FeedLikeSummary, error) {
+	hidden := make(map[primitive.ObjectID]bool, len(hiddenIDs))
+	for _, id := range hiddenIDs {
+		hidden[id] = true
+	}
+	candidates := make([]primitive.ObjectID, 0, len(followingIDs))
+	for _, id := range followingIDs {
+		if !hidden[id] {
+			candidates = append(candidates, id)
+		}
+	}
+
+	likersByAnchor, err := s.likesRepo.GetLikersAmong(ctx, anchorIDsOf(anchorsList), candidates, 3)
 	if err != nil {
 		return nil, err
 	}
-
-	// Prioritize followed users
-	var likedByFollowing []FeedLikeSummaryUser
-	followingSet := make(map[primitive.ObjectID]bool)
-	for _, id := range followingIDs {
-		followingSet[id] = true
-	}
-
-	// Filter likers who are followed
-	// We need user details for these likers.
-	// Gather IDs to fetch
 	var likerIDs []primitive.ObjectID
-	for _, l := range likers {
-		likerIDs = append(likerIDs, l.UserID)
+	for _, ids := range likersByAnchor {
+		likerIDs = append(likerIDs, ids...)
 	}
-
+	users := map[primitive.ObjectID]*auth.User{}
 	if len(likerIDs) > 0 {
-		likerUsers, err := s.authRepo.GetUsersByIDs(ctx, likerIDs)
-		if err != nil {
+		if users, err = s.loadUsers(ctx, likerIDs); err != nil {
 			return nil, err
 		}
+	}
 
-		userMap := make(map[primitive.ObjectID]auth.User)
-		for _, u := range likerUsers {
-			userMap[u.ID] = u
-		}
-
-		// Find matches
-		count := 0
-		for _, l := range likers {
-			if count >= 3 {
-				break
-			}
-			if followingSet[l.UserID] {
-				if u, ok := userMap[l.UserID]; ok {
-					likedByFollowing = append(likedByFollowing, FeedLikeSummaryUser{
-						ID:             u.ID,
-						Username:       u.Username,
-						DisplayName:    u.DisplayName,
-						ProfilePicture: &u.ProfilePictureURL,
-					})
-					count++
-				}
+	summaries := make(map[primitive.ObjectID]FeedLikeSummary, len(anchorsList))
+	for _, a := range anchorsList {
+		likedBy := []FeedLikeSummaryUser{}
+		for _, id := range likersByAnchor[a.ID] {
+			if u, ok := users[id]; ok {
+				likedBy = append(likedBy, FeedLikeSummaryUser{
+					ID:             u.ID,
+					Username:       u.Username,
+					DisplayName:    u.DisplayName,
+					ProfilePicture: optionalString(u.ProfilePictureURL),
+				})
 			}
 		}
+		total := a.LikeCount
+		if total < len(likedBy) {
+			total = len(likedBy) // counter lagging behind the likes themselves
+		}
+		summaries[a.ID] = FeedLikeSummary{
+			TotalCount:       total,
+			LikedByFollowing: likedBy,
+			OtherLikersCount: total - len(likedBy),
+		}
 	}
-
-	if likedByFollowing == nil {
-		likedByFollowing = []FeedLikeSummaryUser{} // Ensure array not null
-	}
-
-	otherCount := totalCount - len(likedByFollowing)
-	if otherCount < 0 {
-		otherCount = 0
-	}
-
-	return &FeedLikeSummary{
-		TotalCount:       totalCount,
-		LikedByFollowing: likedByFollowing,
-		OtherLikersCount: otherCount,
-	}, nil
+	return summaries, nil
 }
 
 func (s *Service) GetDiscoverFeed(
 	ctx context.Context,
-	userID *primitive.ObjectID, // nil if not authenticated
+	viewer *auth.User, // nil if not signed in
 	query *DiscoverQuery,
 ) (*DiscoverResponse, error) {
-	// 1. Decode cursor
-	cursor, err := DecodeDiscoverCursor(query.Cursor)
-	if err != nil {
-		return nil, err
-	}
+	cursor := query.Cursor
+	isAuthenticated := viewer != nil
 
-	// 2. Build exclusion list (if authenticated)
-	var excludeUserIDs []primitive.ObjectID
-	var followingIDs []primitive.ObjectID
-	isAuthenticated := userID != nil
-
-	if isAuthenticated {
-		followingIDs, err = s.followsRepo.GetAllFollowingIDs(ctx, *userID)
-		if err != nil {
-			return nil, err
-		}
-		// Discover shows people you don't follow yet; the tag feed shows everyone
-		if !query.IncludeFollowed {
-			excludeUserIDs = append(append(excludeUserIDs, followingIDs...), *userID)
-		}
-	}
-
-	// 3. Get tag pointer
-	var tagPtr *string
-	if query.Tag != "" {
-		tagPtr = &query.Tag
-	}
-
-	// 4. Query anchors, honouring the viewer's blocks, mutes, "not interested" and interests
-	var hiddenAnchorIDs []primitive.ObjectID
+	var excludeUserIDs, followingIDs, hiddenIDs, hiddenAnchorIDs []primitive.ObjectID
 	var interestTags []string
 	if isAuthenticated {
-		currentUser, err := s.authRepo.GetUserByObjectID(ctx, *userID)
-		if err == nil && currentUser != nil {
-			excludeUserIDs = append(append(excludeUserIDs, currentUser.BlockedUsers...), currentUser.MutedUsers...)
-			hiddenAnchorIDs = currentUser.HiddenAnchors
-			if query.Category == CategoryForYou {
-				interestTags = tags.NormalizeList(currentUser.Interests)
-				// If no public anchor matches any interest, fall back to popular instead of an
-				// empty feed (deterministic, so every page of the same scroll agrees)
-				if len(interestTags) > 0 {
-					if ok, err := s.feedRepo.AnyPublicAnchorWithTags(ctx, interestTags); err == nil && !ok {
-						interestTags = nil
-					}
+		var err error
+		if followingIDs, err = s.followsRepo.GetAllFollowingIDs(ctx, viewer.ID); err != nil {
+			return nil, err
+		}
+		if _, hiddenIDs, err = s.hiddenAuthors(ctx, viewer); err != nil {
+			return nil, err
+		}
+		excludeUserIDs = append(excludeUserIDs, hiddenIDs...)
+		// Discover shows people you don't follow yet; the tag feed shows everyone
+		if !query.IncludeFollowed {
+			excludeUserIDs = append(append(excludeUserIDs, followingIDs...), viewer.ID)
+		}
+		hiddenAnchorIDs = viewer.HiddenAnchors
+
+		if query.Category == CategoryForYou {
+			interestTags = tags.NormalizeList(viewer.Interests)
+			// If nothing the viewer could see matches their interests, fall back to popular
+			// instead of an empty feed (deterministic, so every page of the same scroll agrees)
+			if len(interestTags) > 0 {
+				ok, err := s.feedRepo.AnyDiscoverableAnchorWithTags(ctx, interestTags, excludeUserIDs, hiddenAnchorIDs)
+				if err != nil {
+					return nil, err
+				}
+				if !ok {
+					interestTags = nil
 				}
 			}
 		}
 	}
-	// for_you without saved interests (or logged out) behaves like popular
+	// for_you without saved interests (or signed out) behaves like popular
+
+	var tagPtr *string
+	if query.Tag != "" {
+		tagPtr = &query.Tag
+	}
 
 	anchorsList, err := s.feedRepo.GetDiscoverAnchors(
 		ctx, excludeUserIDs, hiddenAnchorIDs, interestTags, query.Category, tagPtr, cursor, query.Limit+1,
@@ -566,31 +475,25 @@ func (s *Service) GetDiscoverFeed(
 		return nil, err
 	}
 
-	// 5. Check hasMore
 	hasMore := false
 	if len(anchorsList) > query.Limit {
 		hasMore = true
 		anchorsList = anchorsList[:query.Limit]
 	}
 
-	// 6. Handle empty results
 	if len(anchorsList) == 0 {
 		var emptyReason string
-		if query.Tag != "" {
-			emptyReason = "NO_TAG_CONTENT"
-		} else if cursor != nil {
+		switch {
+		case cursor != nil:
 			emptyReason = "END_OF_FEED"
-		} else {
+		case query.Tag != "":
+			emptyReason = "NO_TAG_CONTENT"
+		default:
 			emptyReason = "NO_CONTENT"
 		}
-
 		return &DiscoverResponse{
-			Items: []DiscoverItem{},
-			Pagination: FeedPagination{
-				Limit:     query.Limit,
-				HasMore:   false,
-				ItemCount: 0,
-			},
+			Items:      []DiscoverItem{},
+			Pagination: FeedPagination{Limit: query.Limit},
 			Meta: DiscoverMeta{
 				FeedType:        "discover",
 				Category:        query.Category,
@@ -601,87 +504,7 @@ func (s *Service) GetDiscoverFeed(
 		}, nil
 	}
 
-	// 7. Enrich with authors (includes followerCount)
-	authorIDs := make([]primitive.ObjectID, len(anchorsList))
-	for i, a := range anchorsList {
-		authorIDs[i] = a.UserID
-	}
-	authorsMap, err := s.enrichDiscoverAuthors(ctx, authorIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	// 8. Enrich with engagement (if authenticated)
-	var engagementMap map[primitive.ObjectID]*FeedEngagement
-	if isAuthenticated {
-		engagementMap, err = s.enrichWithEngagement(ctx, anchorsList, *userID, followingIDs)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		// Build empty engagement for unauthenticated
-		engagementMap = make(map[primitive.ObjectID]*FeedEngagement)
-		for _, a := range anchorsList {
-			// A failed summary lookup must not crash the feed: fall back to an empty summary
-			var summary FeedLikeSummary
-			if likeSummary, err := s.getLikeSummary(ctx, a.ID, a.LikeCount, nil); err == nil && likeSummary != nil {
-				summary = *likeSummary
-			}
-			engagementMap[a.ID] = &FeedEngagement{
-				HasLiked:    false,
-				HasCloned:   false,
-				LikeSummary: summary,
-			}
-		}
-	}
-
-	// 9. Enrich with previews
-	anchorIDs := make([]primitive.ObjectID, len(anchorsList))
-	for i, a := range anchorsList {
-		anchorIDs[i] = a.ID
-	}
-	previewsMap, err := s.getPreviewsForAnchors(ctx, anchorIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	// 10. Build response items
-	items := make([]DiscoverItem, len(anchorsList))
-	for i, anchor := range anchorsList {
-		author := authorsMap[anchor.UserID]
-		if author == nil {
-			author = &DiscoverItemAuthor{ID: anchor.UserID, Username: "Unknown"}
-		}
-
-		engagement := engagementMap[anchor.ID]
-		preview := previewsMap[anchor.ID]
-		if preview == nil {
-			preview = &FeedPreview{Items: []FeedPreviewItem{}}
-		}
-
-		items[i] = DiscoverItem{
-			ID:              anchor.ID,
-			Title:           anchor.Title,
-			Description:     anchor.Description,
-			CoverMediaType:  anchor.CoverMediaType,
-			CoverMediaValue: anchor.CoverMediaValue,
-			Visibility:      anchor.Visibility,
-			IsPinned:        anchor.IsPinned,
-			Tags:            anchor.Tags,
-			ItemCount:       anchor.ItemCount,
-			LikeCount:       anchor.LikeCount,
-			CloneCount:      anchor.CloneCount,
-			CommentCount:    anchor.CommentCount,
-			EngagementScore: anchor.EngagementScore,
-			LastItemAddedAt: anchor.LastItemAddedAt,
-			CreatedAt:       anchor.CreatedAt,
-			Author:          *author,
-			Engagement:      *engagement,
-			Preview:         *preview,
-		}
-	}
-
-	// 11. Build next cursor
+	// The cursor comes from the last anchor of the query, before anything is dropped below
 	var nextCursor *string
 	if hasMore {
 		lastAnchor := anchorsList[len(anchorsList)-1]
@@ -693,6 +516,58 @@ func (s *Service) GetDiscoverFeed(
 			c = EncodeDiscoverCursor(&score, lastAnchor.CreatedAt, lastAnchor.ID)
 		}
 		nextCursor = &c
+	}
+
+	users, err := s.loadUsers(ctx, authorIDsOf(anchorsList))
+	if err != nil {
+		return nil, err
+	}
+	engagementMap, err := s.enrichWithEngagement(ctx, anchorsList, viewer, followingIDs, hiddenIDs)
+	if err != nil {
+		return nil, err
+	}
+	previewsMap, err := s.getPreviewsForAnchors(ctx, anchorIDsOf(anchorsList))
+	if err != nil {
+		return nil, err
+	}
+
+	items := make([]DiscoverItem, 0, len(anchorsList))
+	for _, anchor := range anchorsList {
+		author, ok := users[anchor.UserID]
+		if !ok {
+			continue // the author's account is being deleted
+		}
+		preview := previewsMap[anchor.ID]
+		if preview == nil {
+			preview = &FeedPreview{Items: []FeedPreviewItem{}}
+		}
+		items = append(items, DiscoverItem{
+			ID:              anchor.ID,
+			Title:           anchor.Title,
+			Description:     anchor.Description,
+			CoverMediaType:  anchor.CoverMediaType,
+			CoverMediaValue: anchor.CoverMediaValue,
+			Visibility:      anchor.Visibility,
+			IsPinned:        anchor.IsPinned,
+			Tags:            nonNilTags(anchor.Tags),
+			ItemCount:       anchor.ItemCount,
+			LikeCount:       anchor.LikeCount,
+			CloneCount:      anchor.CloneCount,
+			CommentCount:    anchor.CommentCount,
+			EngagementScore: anchor.EngagementScore,
+			LastItemAddedAt: anchor.LastItemAddedAt,
+			CreatedAt:       anchor.CreatedAt,
+			Author: DiscoverItemAuthor{
+				ID:             author.ID,
+				Username:       author.Username,
+				DisplayName:    author.DisplayName,
+				ProfilePicture: optionalString(author.ProfilePictureURL),
+				IsVerified:     author.IsVerified,
+				FollowerCount:  author.FollowerCount,
+			},
+			Engagement: *engagementMap[anchor.ID],
+			Preview:    *preview,
+		})
 	}
 
 	return &DiscoverResponse{
@@ -713,35 +588,35 @@ func (s *Service) GetDiscoverFeed(
 	}, nil
 }
 
-// enrichDiscoverAuthors fetches author info with follower count
-func (s *Service) enrichDiscoverAuthors(ctx context.Context, userIDs []primitive.ObjectID) (map[primitive.ObjectID]*DiscoverItemAuthor, error) {
-	// Deduplicate
-	uniqueIDs := make(map[primitive.ObjectID]bool)
-	var ids []primitive.ObjectID
-	for _, id := range userIDs {
-		if !uniqueIDs[id] {
-			uniqueIDs[id] = true
-			ids = append(ids, id)
-		}
+func anchorIDsOf(list []anchors.Anchor) []primitive.ObjectID {
+	ids := make([]primitive.ObjectID, len(list))
+	for i, a := range list {
+		ids[i] = a.ID
 	}
+	return ids
+}
 
-	users, err := s.authRepo.GetUsersByIDs(ctx, ids)
-	if err != nil {
-		return nil, err
+func authorIDsOf(list []anchors.Anchor) []primitive.ObjectID {
+	ids := make([]primitive.ObjectID, len(list))
+	for i, a := range list {
+		ids[i] = a.UserID
 	}
+	return ids
+}
 
-	authorMap := make(map[primitive.ObjectID]*DiscoverItemAuthor)
-	for _, user := range users {
-		authorMap[user.ID] = &DiscoverItemAuthor{
-			ID:             user.ID,
-			Username:       user.Username,
-			DisplayName:    user.DisplayName,
-			ProfilePicture: &user.ProfilePictureURL,
-			IsVerified:     user.IsVerified,
-			FollowerCount:  user.FollowerCount,
-		}
+// optionalString returns nil for "", so a missing picture is null rather than ""
+func optionalString(s string) *string {
+	if s == "" {
+		return nil
 	}
-	return authorMap, nil
+	return &s
+}
+
+func nonNilTags(t []string) []string {
+	if t == nil {
+		return []string{}
+	}
+	return t
 }
 
 // truncateRunes shortens s to at most max characters (not bytes, so multi-byte characters

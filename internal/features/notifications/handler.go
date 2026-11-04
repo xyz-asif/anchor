@@ -2,6 +2,8 @@ package notifications
 
 import (
 	"context"
+	"errors"
+	"log"
 	"math"
 
 	"github.com/gin-gonic/gin"
@@ -45,20 +47,13 @@ func NewHandler(repo *Repository, authRepo *auth.Repository, contentProvider Con
 // @Failure 401 {object} response.APIResponse
 // @Router /notifications [get]
 func (h *Handler) ListNotifications(c *gin.Context) {
-	usr, exists := c.Get("user")
-	if !exists {
-		response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
-		return
-	}
-	currentUser := usr.(*auth.User)
-
-	var query NotificationListQuery
-	if err := c.ShouldBindQuery(&query); err != nil {
-		response.BadRequest(c, "Invalid query parameters", "INVALID_QUERY")
+	currentUser, ok := requireUser(c)
+	if !ok {
 		return
 	}
 
-	if err := ValidateNotificationListQuery(&query); err != nil {
+	query, err := ParseNotificationListQuery(c.Query("page"), c.Query("limit"), c.Query("unreadOnly"))
+	if err != nil {
 		response.BadRequest(c, err.Error(), "INVALID_QUERY")
 		return
 	}
@@ -71,12 +66,17 @@ func (h *Handler) ListNotifications(c *gin.Context) {
 		query.Limit,
 	)
 	if err != nil {
-		response.InternalServerError(c, "Failed to fetch notifications", "FETCH_FAILED")
+		log.Printf("notifications: listing failed: %v", err)
+		response.InternalServerError(c, "We couldn't load your notifications right now. Please try again", "FETCH_FAILED")
 		return
 	}
 
-	// Enrich notifications
-	enrichedNotifications := h.enrichNotifications(c.Request.Context(), notifications)
+	enrichedNotifications, err := h.enrichNotifications(c.Request.Context(), notifications)
+	if err != nil {
+		log.Printf("notifications: enriching failed: %v", err)
+		response.InternalServerError(c, "We couldn't load your notifications right now. Please try again", "FETCH_FAILED")
+		return
+	}
 
 	totalPages := int(math.Ceil(float64(total) / float64(query.Limit)))
 
@@ -102,16 +102,15 @@ func (h *Handler) ListNotifications(c *gin.Context) {
 // @Failure 401 {object} response.APIResponse
 // @Router /notifications/unread-count [get]
 func (h *Handler) GetUnreadCount(c *gin.Context) {
-	usr, exists := c.Get("user")
-	if !exists {
-		response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
+	currentUser, ok := requireUser(c)
+	if !ok {
 		return
 	}
-	currentUser := usr.(*auth.User)
 
 	count, err := h.repo.CountUnread(c.Request.Context(), currentUser.ID)
 	if err != nil {
-		response.InternalServerError(c, "Failed to count notifications", "COUNT_FAILED")
+		log.Printf("notifications: counting unread failed: %v", err)
+		response.InternalServerError(c, "We couldn't count your notifications right now. Please try again", "COUNT_FAILED")
 		return
 	}
 
@@ -132,35 +131,25 @@ func (h *Handler) GetUnreadCount(c *gin.Context) {
 // @Failure 404 {object} response.APIResponse
 // @Router /notifications/{id}/read [patch]
 func (h *Handler) MarkAsRead(c *gin.Context) {
-	usr, exists := c.Get("user")
-	if !exists {
-		response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
-		return
-	}
-	currentUser := usr.(*auth.User)
-
-	notificationIDStr := c.Param("id")
-	notificationID, err := primitive.ObjectIDFromHex(notificationIDStr)
-	if err != nil {
-		response.BadRequest(c, "Invalid notification ID", "INVALID_ID")
+	currentUser, ok := requireUser(c)
+	if !ok {
 		return
 	}
 
-	// Get notification to verify ownership
-	notification, err := h.repo.GetNotificationByID(c.Request.Context(), notificationID)
-	if err != nil {
-		response.NotFound(c, "Notification not found", "NOT_FOUND")
+	notificationID, ok := parseNotificationID(c)
+	if !ok {
 		return
 	}
 
-	// Verify ownership
-	if notification.RecipientID != currentUser.ID {
-		response.Forbidden(c, "Cannot mark others' notifications", "FORBIDDEN")
-		return
-	}
-
-	if err := h.repo.MarkAsRead(c.Request.Context(), notificationID); err != nil {
-		response.InternalServerError(c, "Failed to mark as read", "UPDATE_FAILED")
+	// Ownership is part of the update: someone else's notification is simply "not found"
+	// (it used to answer 403, confirming that the ID exists)
+	if err := h.repo.MarkAsRead(c.Request.Context(), notificationID, currentUser.ID); err != nil {
+		if errors.Is(err, ErrNotificationNotFound) {
+			response.NotFound(c, msgNotificationNotFound, "NOT_FOUND")
+			return
+		}
+		log.Printf("notifications: mark read failed: %v", err)
+		response.InternalServerError(c, "We couldn't mark this notification as read. Please try again", "UPDATE_FAILED")
 		return
 	}
 
@@ -180,16 +169,15 @@ func (h *Handler) MarkAsRead(c *gin.Context) {
 // @Failure 401 {object} response.APIResponse
 // @Router /notifications/read-all [patch]
 func (h *Handler) MarkAllAsRead(c *gin.Context) {
-	usr, exists := c.Get("user")
-	if !exists {
-		response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
+	currentUser, ok := requireUser(c)
+	if !ok {
 		return
 	}
-	currentUser := usr.(*auth.User)
 
 	count, err := h.repo.MarkAllAsRead(c.Request.Context(), currentUser.ID)
 	if err != nil {
-		response.InternalServerError(c, "Failed to mark all as read", "UPDATE_FAILED")
+		log.Printf("notifications: mark all read failed: %v", err)
+		response.InternalServerError(c, "We couldn't mark your notifications as read. Please try again", "UPDATE_FAILED")
 		return
 	}
 
@@ -206,27 +194,25 @@ func (h *Handler) MarkAllAsRead(c *gin.Context) {
 // @Failure 404 {object} response.APIResponse
 // @Router /notifications/{id} [delete]
 func (h *Handler) DeleteNotification(c *gin.Context) {
-	usr, exists := c.Get("user")
-	if !exists {
-		response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
+	currentUser, ok := requireUser(c)
+	if !ok {
 		return
 	}
-	currentUser := usr.(*auth.User)
 
-	notificationID, err := primitive.ObjectIDFromHex(c.Param("id"))
-	if err != nil {
-		response.BadRequest(c, "Invalid notification ID", "INVALID_ID")
+	notificationID, ok := parseNotificationID(c)
+	if !ok {
 		return
 	}
 
 	// Ownership is enforced in the query: other users' notifications look "not found"
 	deleted, err := h.repo.DeleteForRecipient(c.Request.Context(), notificationID, currentUser.ID)
 	if err != nil {
-		response.InternalServerError(c, "Failed to delete notification", "DELETE_FAILED")
+		log.Printf("notifications: delete failed: %v", err)
+		response.InternalServerError(c, "We couldn't delete this notification. Please try again", "DELETE_FAILED")
 		return
 	}
 	if !deleted {
-		response.NotFound(c, "Notification not found", "NOT_FOUND")
+		response.NotFound(c, msgNotificationNotFound, "NOT_FOUND")
 		return
 	}
 
@@ -243,17 +229,20 @@ func (h *Handler) DeleteNotification(c *gin.Context) {
 // @Success 200 {object} response.APIResponse{data=DeleteNotificationsResponse}
 // @Router /notifications [delete]
 func (h *Handler) ClearNotifications(c *gin.Context) {
-	usr, exists := c.Get("user")
-	if !exists {
-		response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
+	currentUser, ok := requireUser(c)
+	if !ok {
 		return
 	}
-	currentUser := usr.(*auth.User)
 
-	readOnly := c.Query("readOnly") == "true"
+	readOnly, err := parseBool(c.Query("readOnly"), "readOnly")
+	if err != nil {
+		response.BadRequest(c, err.Error(), "INVALID_QUERY")
+		return
+	}
 	count, err := h.repo.DeleteAllForRecipient(c.Request.Context(), currentUser.ID, readOnly)
 	if err != nil {
-		response.InternalServerError(c, "Failed to clear notifications", "DELETE_FAILED")
+		log.Printf("notifications: clear failed: %v", err)
+		response.InternalServerError(c, "We couldn't clear your notifications. Please try again", "DELETE_FAILED")
 		return
 	}
 
@@ -261,9 +250,9 @@ func (h *Handler) ClearNotifications(c *gin.Context) {
 }
 
 // Helper to enrich notifications with actor and anchor data
-func (h *Handler) enrichNotifications(ctx context.Context, notifications []Notification) []NotificationResponse {
+func (h *Handler) enrichNotifications(ctx context.Context, notifications []Notification) ([]NotificationResponse, error) {
 	if len(notifications) == 0 {
-		return []NotificationResponse{}
+		return []NotificationResponse{}, nil
 	}
 
 	// Collect actor and anchor IDs
@@ -284,7 +273,11 @@ func (h *Handler) enrichNotifications(ctx context.Context, notifications []Notif
 	}
 
 	// Batch fetch actors
-	actors, _ := h.authRepo.GetUsersByIDs(ctx, actorIDs)
+	// A failed lookup must not show every actor as "Deleted User"
+	actors, err := h.authRepo.GetUsersByIDs(ctx, actorIDs)
+	if err != nil {
+		return nil, err
+	}
 	actorMap := make(map[primitive.ObjectID]*auth.User)
 	for i := range actors {
 		actorMap[actors[i].ID] = &actors[i]
@@ -292,8 +285,10 @@ func (h *Handler) enrichNotifications(ctx context.Context, notifications []Notif
 
 	// Batch fetch anchor titles
 	var titleMap map[primitive.ObjectID]string
-	if len(anchorIDs) > 0 {
-		titleMap, _ = h.contentProvider.GetAnchorTitles(ctx, anchorIDs)
+	if len(anchorIDs) > 0 && h.contentProvider != nil {
+		if titleMap, err = h.contentProvider.GetAnchorTitles(ctx, anchorIDs); err != nil {
+			return nil, err
+		}
 	}
 	if titleMap == nil {
 		titleMap = make(map[primitive.ObjectID]string)
@@ -317,7 +312,8 @@ func (h *Handler) enrichNotifications(ctx context.Context, notifications []Notif
 		if actor, ok := actorMap[n.ActorID]; ok {
 			var profilePic *string
 			if actor.ProfilePictureURL != "" {
-				profilePic = &actor.ProfilePictureURL
+				pic := actor.ProfilePictureURL
+				profilePic = &pic
 			}
 			resp.Actor = NotificationActor{
 				ID:             actor.ID,
@@ -346,5 +342,27 @@ func (h *Handler) enrichNotifications(ctx context.Context, notifications []Notif
 		responses[i] = resp
 	}
 
-	return responses
+	return responses, nil
+}
+
+const msgNotificationNotFound = "This notification doesn't exist or was already deleted"
+
+func requireUser(c *gin.Context) (*auth.User, bool) {
+	if val, exists := c.Get("user"); exists {
+		if user, ok := val.(*auth.User); ok {
+			return user, true
+		}
+	}
+	response.Unauthorized(c, "Please sign in to see your notifications", "UNAUTHORIZED")
+	return nil, false
+}
+
+func parseNotificationID(c *gin.Context) (primitive.ObjectID, bool) {
+	raw := c.Param("id")
+	id, err := primitive.ObjectIDFromHex(raw)
+	if err != nil {
+		response.BadRequest(c, `"`+raw+`" isn't a valid notification ID`, "INVALID_ID")
+		return primitive.NilObjectID, false
+	}
+	return id, true
 }

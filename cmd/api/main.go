@@ -23,6 +23,7 @@ import (
 
 	"github.com/xyz-asif/gotodo/internal/config"
 	"github.com/xyz-asif/gotodo/internal/database"
+	"github.com/xyz-asif/gotodo/internal/features/push"
 	"github.com/xyz-asif/gotodo/internal/middleware"
 	"github.com/xyz-asif/gotodo/internal/pkg/ratelimit"
 	"github.com/xyz-asif/gotodo/internal/pkg/response"
@@ -156,6 +157,7 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Fatal("Server forced to shutdown:", err)
 	}
+	push.Shutdown() // send pushes still queued
 
 	log.Println("Server exited")
 }

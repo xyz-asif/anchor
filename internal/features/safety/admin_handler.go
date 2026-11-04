@@ -1,10 +1,16 @@
 package safety
 
 import (
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xyz-asif/gotodo/internal/features/auth"
+	"github.com/xyz-asif/gotodo/internal/pkg/bind"
 	"github.com/xyz-asif/gotodo/internal/pkg/response"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -23,23 +29,23 @@ type reporterInfo struct {
 // @Produce json
 // @Security BearerAuth
 // @Param status query string false "pending | reviewed | actioned | dismissed"
-// @Param targetType query string false "anchor | item | user"
+// @Param targetType query string false "anchor | item | comment | user"
 // @Param page query int false "Page (default 1)"
 // @Param limit query int false "Items per page (default 20, max 100)"
 // @Success 200 {object} response.APIResponse
 // @Failure 403 {object} response.APIResponse
 // @Router /admin/reports [get]
 func (h *Handler) AdminListReports(c *gin.Context) {
-	var q ReportListQuery
-	if err := c.ShouldBindQuery(&q); err != nil {
-		response.BadRequest(c, "Invalid query: "+err.Error(), "INVALID_QUERY")
+	q, err := parseReportListQuery(c.Query("status"), c.Query("targetType"), c.Query("page"), c.Query("limit"))
+	if err != nil {
+		response.BadRequest(c, err.Error(), "INVALID_QUERY")
 		return
 	}
 
 	ctx := c.Request.Context()
 	reports, total, err := h.repo.ListReports(ctx, q.Status, q.TargetType, q.Page, q.Limit)
 	if err != nil {
-		response.InternalServerError(c, "Failed to fetch reports", "DATABASE_ERROR")
+		h.fail(c, "listing reports", err)
 		return
 	}
 
@@ -52,7 +58,7 @@ func (h *Handler) AdminListReports(c *gin.Context) {
 	if len(ids) > 0 {
 		users, err := h.authRepo.GetUsersByIDs(ctx, ids)
 		if err != nil {
-			response.InternalServerError(c, "Failed to fetch reporters", "DATABASE_ERROR")
+			h.fail(c, "loading reporters", err)
 			return
 		}
 		for _, u := range users {
@@ -92,20 +98,19 @@ func (h *Handler) AdminListReports(c *gin.Context) {
 // @Failure 404 {object} response.APIResponse
 // @Router /admin/reports/{id} [get]
 func (h *Handler) AdminGetReport(c *gin.Context) {
-	id, err := primitive.ObjectIDFromHex(c.Param("id"))
-	if err != nil {
-		response.BadRequest(c, "Invalid report ID", "INVALID_ID")
+	id, ok := parseReportID(c)
+	if !ok {
 		return
 	}
 
 	ctx := c.Request.Context()
 	report, err := h.repo.GetReportByID(ctx, id)
 	if err != nil {
-		response.InternalServerError(c, "Failed to fetch report", "DATABASE_ERROR")
+		h.fail(c, "loading report", err)
 		return
 	}
 	if report == nil {
-		response.NotFound(c, "Report not found", "REPORT_NOT_FOUND")
+		response.NotFound(c, msgReportNotFound, "REPORT_NOT_FOUND")
 		return
 	}
 
@@ -117,7 +122,7 @@ func (h *Handler) AdminGetReport(c *gin.Context) {
 	// nil target means it has since been deleted
 	target, err := h.repo.TargetSummary(ctx, report.TargetType, report.TargetID)
 	if err != nil {
-		response.InternalServerError(c, "Failed to fetch reported content", "DATABASE_ERROR")
+		h.fail(c, "loading reported content", err)
 		return
 	}
 
@@ -138,31 +143,45 @@ func (h *Handler) AdminGetReport(c *gin.Context) {
 // @Failure 404 {object} response.APIResponse
 // @Router /admin/reports/{id} [patch]
 func (h *Handler) AdminUpdateReport(c *gin.Context) {
-	id, err := primitive.ObjectIDFromHex(c.Param("id"))
-	if err != nil {
-		response.BadRequest(c, "Invalid report ID", "INVALID_ID")
+	id, ok := parseReportID(c)
+	if !ok {
+		return
+	}
+	admin, ok := currentUser(c)
+	if !ok {
 		return
 	}
 
 	var req UpdateReportRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "status must be one of: pending, reviewed, actioned, dismissed", "INVALID_REQUEST")
+	if !bind.JSON(c, &req) {
+		return
+	}
+	status := strings.ToLower(strings.TrimSpace(req.Status))
+	if !validStatus(status) {
+		msg := "Please set a status: pending, reviewed, actioned or dismissed"
+		if status != "" {
+			msg = fmt.Sprintf(`"%s" isn't a report status. Use pending, reviewed, actioned or dismissed`, req.Status)
+		}
+		response.BadRequest(c, msg, "VALIDATION_FAILED")
+		return
+	}
+	note := strings.TrimSpace(req.Note)
+	if n := utf8.RuneCountInString(note); n > maxNoteLength {
+		response.BadRequest(c, fmt.Sprintf("The note can be at most %d characters long (this one has %d)", maxNoteLength, n), "VALIDATION_FAILED")
 		return
 	}
 
-	admin, ok := c.MustGet("user").(*auth.User)
-	if !ok {
-		response.InternalServerError(c, "User context error", "INTERNAL_ERROR")
+	report, err := h.repo.UpdateReportStatus(c.Request.Context(), id, admin.ID, status, note)
+	if errors.Is(err, ErrAlreadyReported) {
+		response.Conflict(c, "This report can't be reopened: the same person has a newer open report on the same content", "ALREADY_REPORTED")
 		return
 	}
-
-	report, err := h.repo.UpdateReportStatus(c.Request.Context(), id, admin.ID, req.Status, req.Note)
 	if err != nil {
-		response.InternalServerError(c, "Failed to update report", "DATABASE_ERROR")
+		h.fail(c, "updating report", err)
 		return
 	}
 	if report == nil {
-		response.NotFound(c, "Report not found", "REPORT_NOT_FOUND")
+		response.NotFound(c, msgReportNotFound, "REPORT_NOT_FOUND")
 		return
 	}
 
@@ -182,22 +201,24 @@ func (h *Handler) AdminUpdateReport(c *gin.Context) {
 // @Failure 404 {object} response.APIResponse
 // @Router /admin/users/{id}/verification [patch]
 func (h *Handler) AdminSetVerification(c *gin.Context) {
-	userID, err := primitive.ObjectIDFromHex(c.Param("id"))
-	if err != nil {
-		response.BadRequest(c, "Invalid user ID", "INVALID_ID")
+	userID, ok := parseUserID(c)
+	if !ok {
 		return
 	}
 
 	var req SetVerificationRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "isVerified (true or false) is required", "INVALID_REQUEST")
+	if !bind.JSON(c, &req) {
 		return
 	}
 
 	ctx := c.Request.Context()
 	target, err := h.authRepo.GetUserByObjectID(ctx, userID)
-	if err != nil || target == nil {
-		response.NotFound(c, "User not found", "USER_NOT_FOUND")
+	if errors.Is(err, auth.ErrUserNotFound) {
+		response.NotFound(c, msgUserNotFound, "USER_NOT_FOUND")
+		return
+	}
+	if err != nil {
+		h.fail(c, "loading user", err)
 		return
 	}
 
@@ -205,7 +226,7 @@ func (h *Handler) AdminSetVerification(c *gin.Context) {
 		"isVerified": *req.IsVerified,
 		"updatedAt":  time.Now(),
 	}); err != nil {
-		response.InternalServerError(c, "Failed to update user", "DATABASE_ERROR")
+		h.fail(c, "updating verification", err)
 		return
 	}
 
@@ -214,4 +235,64 @@ func (h *Handler) AdminSetVerification(c *gin.Context) {
 		"username":   target.Username,
 		"isVerified": *req.IsVerified,
 	}, "Verification updated")
+}
+
+const (
+	maxNoteLength     = 1000
+	maxReportsPage    = 10000
+	msgReportNotFound = "This report doesn't exist"
+)
+
+func validStatus(s string) bool {
+	switch s {
+	case ReportStatusPending, ReportStatusReviewed, ReportStatusActioned, ReportStatusDismissed:
+		return true
+	}
+	return false
+}
+
+func parseReportID(c *gin.Context) (primitive.ObjectID, bool) {
+	raw := c.Param("id")
+	id, err := primitive.ObjectIDFromHex(raw)
+	if err != nil {
+		response.BadRequest(c, fmt.Sprintf(`"%s" isn't a valid report ID`, raw), "INVALID_ID")
+		return primitive.NilObjectID, false
+	}
+	return id, true
+}
+
+// parseReportListQuery reads the admin list filters, explaining any bad value
+func parseReportListQuery(status, targetType, pageStr, limitStr string) (*ReportListQuery, error) {
+	q := &ReportListQuery{Page: 1, Limit: 20}
+	q.Status = strings.ToLower(strings.TrimSpace(status))
+	if q.Status != "" && !validStatus(q.Status) {
+		return nil, fmt.Errorf(`"%s" isn't a report status. Use pending, reviewed, actioned or dismissed`, status)
+	}
+	q.TargetType = strings.ToLower(strings.TrimSpace(targetType))
+	switch q.TargetType {
+	case "", TargetAnchor, TargetItem, TargetComment, TargetUser:
+	default:
+		return nil, fmt.Errorf(`"%s" isn't a target type. Use anchor, item, comment or user`, targetType)
+	}
+	if s := strings.TrimSpace(pageStr); s != "" {
+		n, err := strconv.Atoi(s)
+		if err != nil || n < 1 {
+			return nil, fmt.Errorf(`Page must be a whole number of 1 or more (got "%s")`, pageStr)
+		}
+		if n > maxReportsPage {
+			return nil, fmt.Errorf("Page can't be higher than %d", maxReportsPage)
+		}
+		q.Page = n
+	}
+	if s := strings.TrimSpace(limitStr); s != "" {
+		n, err := strconv.Atoi(s)
+		if err != nil || n < 1 {
+			return nil, fmt.Errorf(`Limit must be a whole number between 1 and 100 (got "%s")`, limitStr)
+		}
+		if n > 100 {
+			n = 100
+		}
+		q.Limit = n
+	}
+	return q, nil
 }

@@ -2,6 +2,8 @@ package notifications
 
 import (
 	"context"
+	"errors"
+	"log"
 	"time"
 
 	"github.com/xyz-asif/gotodo/internal/features/auth"
@@ -275,6 +277,11 @@ func (s *Service) CreateCloneNotification(ctx context.Context, clonedAnchorID, o
 		return nil
 	}
 
+	// One clone notification per person and anchor: clone, delete, clone again must not spam
+	if exists, err := s.repo.ExistsForAnchor(ctx, ownerID, actorID, TypeClone, originalAnchorID); err != nil || exists {
+		return err
+	}
+
 	notification := Notification{
 		RecipientID:  ownerID,
 		ActorID:      actorID,
@@ -290,10 +297,15 @@ func (s *Service) CreateCloneNotification(ctx context.Context, clonedAnchorID, o
 
 // isBlocked reports whether the recipient has blocked or muted the actor; either way the
 // recipient should not get notifications about the actor's activity.
+// When the lookup fails the notification is skipped: missing one notification is better than
+// notifying someone about a person they blocked.
 func (s *Service) isBlocked(ctx context.Context, recipientID, actorID primitive.ObjectID) bool {
 	user, err := s.authRepo.GetUserByObjectID(ctx, recipientID)
-	if err != nil || user == nil {
-		return false // Default to not blocked if error
+	if err != nil {
+		if !errors.Is(err, auth.ErrUserNotFound) {
+			log.Printf("notifications: block check for %s failed, skipping notification: %v", recipientID.Hex(), err)
+		}
+		return true // unknown or deleted recipient: nobody to notify
 	}
 	return user.HasBlocked(actorID) || user.HasMuted(actorID)
 }
@@ -314,17 +326,34 @@ func (s *Service) CreateAnchorUpdateNotifications(ctx context.Context, anchorID 
 		return nil
 	}
 
-	// Create notifications in batch
-	now := time.Now()
-	notificationsList := make([]Notification, 0)
+	preview := truncateString(anchorTitle, 100)
 
-	for _, followerID := range followerIDs {
-		// Don't notify the author, or followers who blocked or muted the author
-		if followerID == authorID || s.isBlocked(ctx, followerID, authorID) {
+	// Followers who blocked or muted the author: one query for everyone, not one per follower
+	skip, err := s.repo.UsersBlockingOrMuting(ctx, followerIDs, authorID)
+	if err != nil {
+		return err
+	}
+	recipients := make([]primitive.ObjectID, 0, len(followerIDs))
+	for _, id := range followerIDs {
+		if id != authorID && !skip[id] {
+			recipients = append(recipients, id)
+		}
+	}
+
+	// Adding 20 items used to send every follower 20 notifications (and pushes). A follower who
+	// still has an unread update notification for this anchor gets that one refreshed instead.
+	refreshed, err := s.repo.RefreshUnread(ctx, recipients, TypeAnchorUpdate, anchorID, preview)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	notificationsList := make([]Notification, 0, len(recipients))
+	for _, followerID := range recipients {
+		if refreshed[followerID] {
 			continue
 		}
-
-		notification := Notification{
+		notificationsList = append(notificationsList, Notification{
 			ID:           primitive.NewObjectID(),
 			RecipientID:  followerID,
 			ActorID:      authorID,
@@ -332,11 +361,10 @@ func (s *Service) CreateAnchorUpdateNotifications(ctx context.Context, anchorID 
 			ResourceType: "anchor",
 			ResourceID:   anchorID,
 			AnchorID:     &anchorID,
-			Preview:      truncateString(anchorTitle, 100),
+			Preview:      preview,
 			IsRead:       false,
 			CreatedAt:    now,
-		}
-		notificationsList = append(notificationsList, notification)
+		})
 	}
 
 	if len(notificationsList) == 0 {

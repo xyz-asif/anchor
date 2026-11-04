@@ -5,6 +5,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/xyz-asif/gotodo/internal/features/push"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -136,6 +137,14 @@ func cleanupUserActivity(ctx context.Context, db *mongo.Database, userID primiti
 		return err
 	}
 	if _, err := db.Collection("reports").DeleteMany(ctx, bson.M{"$or": []bson.M{{"reporterId": userID}, {"targetId": userID}}}); err != nil {
+		return err
+	}
+
+	// Push tokens and push settings: this account's phones must stop getting pushes
+	if _, err := db.Collection(push.DevicesCollection).DeleteMany(ctx, bson.M{"userId": userID}); err != nil {
+		return err
+	}
+	if _, err := db.Collection(push.SettingsCollection).DeleteOne(ctx, bson.M{"_id": userID}); err != nil {
 		return err
 	}
 

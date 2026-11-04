@@ -40,22 +40,23 @@ type CommentLike struct {
 
 // Request DTOs
 
+// Content is checked (in characters, after trimming) by ValidateCreateCommentRequest
 type CreateCommentRequest struct {
-	Content string `json:"content" binding:"required,min=1,max=1000"`
+	Content string `json:"content"`
 }
 
 type UpdateCommentRequest struct {
-	Content string `json:"content" binding:"required,min=1,max=1000"`
+	Content string `json:"content"`
 }
 
 type CommentLikeActionRequest struct {
-	Action string `json:"action" binding:"required,oneof=like unlike"`
+	Action string `json:"action"` // "like" or "unlike", any letter case
 }
 
 type CommentListQuery struct {
-	Page  int    `form:"page,default=1" binding:"min=1"`
-	Limit int    `form:"limit,default=20" binding:"min=1,max=50"`
-	Sort  string `form:"sort,default=newest"`
+	Page  int
+	Limit int
+	Sort  string
 }
 
 // Response DTOs
@@ -107,11 +108,6 @@ type PaginatedCommentsResponse struct {
 		HasMore    bool  `json:"hasMore"`
 	} `json:"pagination"`
 	Meta CommentListMeta `json:"meta"`
-}
-
-type RepliesListQuery struct {
-	Page  int `form:"page,default=1" binding:"min=1"`
-	Limit int `form:"limit,default=20" binding:"min=1,max=50"`
 }
 
 type PaginatedRepliesResponse struct {

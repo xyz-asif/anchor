@@ -2,6 +2,7 @@ package interests
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"time"
@@ -21,193 +22,179 @@ func NewRepository(db *mongo.Database) *Repository {
 	}
 }
 
-// UpdateUserInterests updates the interests tags for a user
+// ErrUserNotFound is returned when the user no longer exists (e.g. deleted meanwhile)
+var ErrUserNotFound = errors.New("user not found")
+
+// maxLikesConsidered bounds the personalised suggestions to the user's most recent likes
+const maxLikesConsidered = 500
+
+// UpdateUserInterests replaces the user's interests (an empty list clears them)
 func (r *Repository) UpdateUserInterests(ctx context.Context, userID primitive.ObjectID, tags []string) error {
-	filter := bson.M{"_id": userID}
-	update := bson.M{
+	result, err := r.userCollection.UpdateOne(ctx, bson.M{"_id": userID}, bson.M{
 		"$set": bson.M{
 			"interests": tags,
 			"updatedAt": time.Now(),
 		},
+	})
+	if err != nil {
+		return err
 	}
-	_, err := r.userCollection.UpdateOne(ctx, filter, update)
-	return err
+	if result.MatchedCount == 0 {
+		return ErrUserNotFound
+	}
+	return nil
 }
 
-// GetSuggestedTags aggregates tags from user's own anchors and liked anchors
-func (r *Repository) GetSuggestedTags(ctx context.Context, userID primitive.ObjectID, limit int) ([]Category, error) {
-	anchorsCollection := r.userCollection.Database().Collection("anchors")
-	likesCollection := r.userCollection.Database().Collection("likes")
+// tagCount is one tag with how often it appears
+type tagCount struct {
+	Name  string `bson:"_id"`
+	Count int    `bson:"count"`
+}
 
-	// 1. Get tags from user's own anchors
+// GetSuggestedTags ranks tags from the user's own anchors (weight 3) and from anchors they
+// recently liked (weight 2). Liked anchors that were deleted or made private don't count, so
+// a private anchor's tags never surface in someone else's suggestions. Tags are compared
+// case-insensitively, and ties are broken by name so the order is the same on every request.
+func (r *Repository) GetSuggestedTags(ctx context.Context, userID primitive.ObjectID, limit int) ([]Category, error) {
+	db := r.userCollection.Database()
+
 	ownPipeline := mongo.Pipeline{
 		{{Key: "$match", Value: bson.M{"userId": userID, "deletedAt": nil}}},
 		{{Key: "$unwind", Value: "$tags"}},
-		{{Key: "$group", Value: bson.M{
-			"_id":   "$tags",
-			"count": bson.M{"$sum": 1},
-		}}},
-		{{Key: "$project", Value: bson.M{
-			"name":  "$_id",
-			"count": 1,
-			"score": bson.M{"$multiply": []interface{}{"$count", 3}}, // Own anchors weighted 3x
-		}}},
+		{{Key: "$group", Value: bson.M{"_id": bson.M{"$toLower": "$tags"}, "count": bson.M{"$sum": 1}}}},
 	}
-
-	ownCursor, err := anchorsCollection.Aggregate(ctx, ownPipeline)
-	if err != nil {
-		return nil, err
-	}
-	defer ownCursor.Close(ctx)
-
-	var ownTags []Category
-	if err = ownCursor.All(ctx, &ownTags); err != nil {
+	var own []tagCount
+	if err := aggregate(ctx, db.Collection("anchors"), ownPipeline, &own); err != nil {
 		return nil, err
 	}
 
-	// 2. Get tags from liked anchors
 	likedPipeline := mongo.Pipeline{
 		{{Key: "$match", Value: bson.M{"userId": userID}}},
+		{{Key: "$sort", Value: bson.D{{Key: "createdAt", Value: -1}, {Key: "_id", Value: -1}}}},
+		{{Key: "$limit", Value: maxLikesConsidered}},
 		{{Key: "$lookup", Value: bson.M{
-			"from":         "anchors",
-			"localField":   "anchorId",
-			"foreignField": "_id",
-			"as":           "anchor",
+			"from": "anchors",
+			"let":  bson.M{"aid": "$anchorId"},
+			"pipeline": bson.A{
+				bson.M{"$match": bson.M{"$expr": bson.M{"$eq": bson.A{"$_id", "$$aid"}}}},
+				bson.M{"$match": bson.M{"deletedAt": nil, "$or": bson.A{
+					bson.M{"visibility": bson.M{"$ne": "private"}},
+					bson.M{"userId": userID},
+				}}},
+				bson.M{"$project": bson.M{"tags": 1}},
+			},
+			"as": "anchor",
 		}}},
 		{{Key: "$unwind", Value: "$anchor"}},
 		{{Key: "$unwind", Value: "$anchor.tags"}},
-		{{Key: "$group", Value: bson.M{
-			"_id":   "$anchor.tags",
-			"count": bson.M{"$sum": 1},
-		}}},
-		{{Key: "$project", Value: bson.M{
-			"name":  "$_id",
-			"count": 1,
-			"score": bson.M{"$multiply": []interface{}{"$count", 2}}, // Liked anchors weighted 2x
-		}}},
+		{{Key: "$group", Value: bson.M{"_id": bson.M{"$toLower": "$anchor.tags"}, "count": bson.M{"$sum": 1}}}},
 	}
-
-	likedCursor, err := likesCollection.Aggregate(ctx, likedPipeline)
-	if err != nil {
-		return nil, err
-	}
-	defer likedCursor.Close(ctx)
-
-	var likedTags []Category
-	if err = likedCursor.All(ctx, &likedTags); err != nil {
+	var liked []tagCount
+	if err := aggregate(ctx, db.Collection("likes"), likedPipeline, &liked); err != nil {
 		return nil, err
 	}
 
-	// 3. Merge and deduplicate
-	tagMap := make(map[string]*Category)
-	for _, tag := range ownTags {
-		tagMap[tag.Name] = &tag
-	}
-	for _, tag := range likedTags {
-		if existing, ok := tagMap[tag.Name]; ok {
-			existing.Count += tag.Count
-			existing.Score += tag.Score
-		} else {
-			tagMap[tag.Name] = &tag
+	byName := map[string]*Category{}
+	add := func(list []tagCount, weight int) {
+		for _, t := range list {
+			if t.Name == "" {
+				continue
+			}
+			cat, ok := byName[t.Name]
+			if !ok {
+				cat = &Category{Name: t.Name}
+				byName[t.Name] = cat
+			}
+			cat.Count += t.Count
+			cat.Score += t.Count * weight
 		}
 	}
+	add(own, 3)
+	add(liked, 2)
 
-	// Convert to slice and sort by score
-	result := make([]Category, 0, len(tagMap))
-	for _, cat := range tagMap {
+	result := make([]Category, 0, len(byName))
+	for _, cat := range byName {
 		result = append(result, *cat)
 	}
-
-	// Sort by score descending
 	sort.Slice(result, func(i, j int) bool {
-		return result[i].Score > result[j].Score
+		if result[i].Score != result[j].Score {
+			return result[i].Score > result[j].Score
+		}
+		if result[i].Count != result[j].Count {
+			return result[i].Count > result[j].Count
+		}
+		return result[i].Name < result[j].Name
 	})
-
 	if len(result) > limit {
 		result = result[:limit]
 	}
-
-	// Populate slug and icon for each tag
 	for i := range result {
 		result[i].Slug = generateSlug(result[i].Name)
 		result[i].Icon = getIconForCategory(result[i].Name)
 	}
-
 	return result, nil
 }
 
-// GetPopularTags returns the most popular tags across the platform
+// GetPopularTags returns the most used tags on public anchors. While the platform is young and
+// has fewer tags than requested, the list is topped up with starter categories, so an interest
+// picker is never nearly empty.
 func (r *Repository) GetPopularTags(ctx context.Context, limit int) ([]Category, error) {
-	anchorsCollection := r.userCollection.Database().Collection("anchors")
-
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: bson.M{"deletedAt": nil, "visibility": "public"}}},
 		{{Key: "$unwind", Value: "$tags"}},
-		{{Key: "$group", Value: bson.M{
-			"_id":   "$tags",
-			"count": bson.M{"$sum": 1},
-		}}},
-		{{Key: "$sort", Value: bson.M{"count": -1}}},
+		{{Key: "$group", Value: bson.M{"_id": bson.M{"$toLower": "$tags"}, "count": bson.M{"$sum": 1}}}},
+		{{Key: "$sort", Value: bson.D{{Key: "count", Value: -1}, {Key: "_id", Value: 1}}}},
 		{{Key: "$limit", Value: limit}},
-		{{Key: "$project", Value: bson.M{
-			"name":  "$_id",
-			"count": 1,
-			"score": "$count",
-		}}},
 	}
-
-	cursor, err := anchorsCollection.Aggregate(ctx, pipeline)
-	if err != nil {
-		return nil, err
-	}
-	defer cursor.Close(ctx)
-
-	var tags []Category
-	if err = cursor.All(ctx, &tags); err != nil {
+	var counts []tagCount
+	if err := aggregate(ctx, r.userCollection.Database().Collection("anchors"), pipeline, &counts); err != nil {
 		return nil, err
 	}
 
-	// If no tags found, return seed data
-	if len(tags) == 0 {
-		return getSeedCategories(limit), nil
+	result := make([]Category, 0, limit)
+	seen := map[string]bool{}
+	for _, t := range counts {
+		if t.Name == "" {
+			continue
+		}
+		seen[t.Name] = true
+		result = append(result, Category{Name: t.Name, Slug: generateSlug(t.Name), Icon: getIconForCategory(t.Name), Count: t.Count, Score: t.Count})
 	}
-
-	// Populate slug and icon for each tag
-	for i := range tags {
-		tags[i].Slug = generateSlug(tags[i].Name)
-		tags[i].Icon = getIconForCategory(tags[i].Name)
+	for _, seed := range getSeedCategories(len(seedCategories)) {
+		if len(result) >= limit {
+			break
+		}
+		if !seen[seed.Slug] {
+			seen[seed.Slug] = true
+			result = append(result, seed)
+		}
 	}
-
-	return tags, nil
+	return result, nil
 }
 
-// getSeedCategories returns hardcoded popular categories for onboarding
-func getSeedCategories(limit int) []Category {
-	seeds := []Category{
-		{Name: "Tech", Slug: "tech", Icon: "💻", Count: 0, Score: 0},
-		{Name: "Photography", Slug: "photography", Icon: "📷", Count: 0, Score: 0},
-		{Name: "Travel", Slug: "travel", Icon: "✈️", Count: 0, Score: 0},
-		{Name: "Food", Slug: "food", Icon: "🍔", Count: 0, Score: 0},
-		{Name: "Fitness", Slug: "fitness", Icon: "💪", Count: 0, Score: 0},
-		{Name: "Music", Slug: "music", Icon: "🎵", Count: 0, Score: 0},
-		{Name: "Art", Slug: "art", Icon: "🎨", Count: 0, Score: 0},
-		{Name: "Books", Slug: "books", Icon: "📚", Count: 0, Score: 0},
-		{Name: "Gaming", Slug: "gaming", Icon: "🎮", Count: 0, Score: 0},
-		{Name: "Fashion", Slug: "fashion", Icon: "👗", Count: 0, Score: 0},
-		{Name: "Design", Slug: "design", Icon: "✨", Count: 0, Score: 0},
-		{Name: "Business", Slug: "business", Icon: "💼", Count: 0, Score: 0},
-		{Name: "Science", Slug: "science", Icon: "🔬", Count: 0, Score: 0},
-		{Name: "Sports", Slug: "sports", Icon: "⚽", Count: 0, Score: 0},
-		{Name: "Movies", Slug: "movies", Icon: "🎬", Count: 0, Score: 0},
-		{Name: "Nature", Slug: "nature", Icon: "🌿", Count: 0, Score: 0},
-		{Name: "Cooking", Slug: "cooking", Icon: "👨‍🍳", Count: 0, Score: 0},
-		{Name: "DIY", Slug: "diy", Icon: "🔨", Count: 0, Score: 0},
+func aggregate(ctx context.Context, coll *mongo.Collection, pipeline mongo.Pipeline, out interface{}) error {
+	cursor, err := coll.Aggregate(ctx, pipeline)
+	if err != nil {
+		return err
 	}
+	defer cursor.Close(ctx)
+	return cursor.All(ctx, out)
+}
 
-	if limit > len(seeds) {
-		limit = len(seeds)
+// seedCategories are starter interests for a platform without many tags yet. Names use the
+// stored tag format (lowercase), so a picked seed matches anchor tags exactly.
+var seedCategories = []string{"tech", "photography", "travel", "food", "fitness", "music", "art", "books", "gaming", "fashion", "design", "business", "science", "sports", "movies", "nature", "cooking", "diy"}
+
+// getSeedCategories returns up to limit starter categories
+func getSeedCategories(limit int) []Category {
+	if limit > len(seedCategories) {
+		limit = len(seedCategories)
 	}
-	return seeds[:limit]
+	out := make([]Category, limit)
+	for i, name := range seedCategories[:limit] {
+		out[i] = Category{Name: name, Slug: name, Icon: getIconForCategory(name)}
+	}
+	return out
 }
 
 // generateSlug creates a URL-friendly slug from a tag name

@@ -117,12 +117,17 @@ func (r *Repository) GetFollowStatus(ctx context.Context, userID, targetID primi
 }
 
 // GetFollowers retrieves followers of a user with pagination
-func (r *Repository) GetFollowers(ctx context.Context, userID primitive.ObjectID, page, limit int) ([]Follow, int64, error) {
+// Users in hidden (block relationships with the viewer) are excluded in the query itself, so
+// pages stay full and the total matches what can actually be listed.
+func (r *Repository) GetFollowers(ctx context.Context, userID primitive.ObjectID, hidden []primitive.ObjectID, page, limit int) ([]Follow, int64, error) {
 	filter := bson.M{"followingId": userID}
+	if len(hidden) > 0 {
+		filter["followerId"] = bson.M{"$nin": hidden}
+	}
 
 	opts := options.Find().
-		SetSort(bson.D{{Key: "createdAt", Value: -1}}).
-		SetSkip(int64((page - 1) * limit)).
+		SetSort(bson.D{{Key: "createdAt", Value: -1}, {Key: "_id", Value: -1}}). // _id: stable order for equal times
+		SetSkip(int64(page-1) * int64(limit)).
 		SetLimit(int64(limit))
 
 	cursor, err := r.collection.Find(ctx, filter, opts)
@@ -145,12 +150,17 @@ func (r *Repository) GetFollowers(ctx context.Context, userID primitive.ObjectID
 }
 
 // GetFollowing retrieves users that a user follows with pagination
-func (r *Repository) GetFollowing(ctx context.Context, userID primitive.ObjectID, page, limit int) ([]Follow, int64, error) {
+// Users in hidden (block relationships with the viewer) are excluded in the query itself, so
+// pages stay full and the total matches what can actually be listed.
+func (r *Repository) GetFollowing(ctx context.Context, userID primitive.ObjectID, hidden []primitive.ObjectID, page, limit int) ([]Follow, int64, error) {
 	filter := bson.M{"followerId": userID}
+	if len(hidden) > 0 {
+		filter["followingId"] = bson.M{"$nin": hidden}
+	}
 
 	opts := options.Find().
-		SetSort(bson.D{{Key: "createdAt", Value: -1}}).
-		SetSkip(int64((page - 1) * limit)).
+		SetSort(bson.D{{Key: "createdAt", Value: -1}, {Key: "_id", Value: -1}}). // _id: stable order for equal times
+		SetSkip(int64(page-1) * int64(limit)).
 		SetLimit(int64(limit))
 
 	cursor, err := r.collection.Find(ctx, filter, opts)

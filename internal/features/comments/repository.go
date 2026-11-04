@@ -11,6 +11,10 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+// ErrCommentNotFound means the comment doesn't exist (or was deleted); other errors mean the
+// lookup itself failed
+var ErrCommentNotFound = errors.New("comment not found")
+
 type Repository struct {
 	commentsCollection     *mongo.Collection
 	commentLikesCollection *mongo.Collection
@@ -21,7 +25,7 @@ func NewRepository(db *mongo.Database) *Repository {
 	commentLikesCollection := db.Collection("commentLikes")
 
 	// Create indexes
-	commentsCollection.Indexes().CreateMany(context.Background(), []mongo.IndexModel{
+	_, _ = commentsCollection.Indexes().CreateMany(context.Background(), []mongo.IndexModel{
 		{
 			Keys: bson.D{
 				{Key: "anchorId", Value: 1},
@@ -52,7 +56,7 @@ func NewRepository(db *mongo.Database) *Repository {
 		},
 	})
 
-	commentLikesCollection.Indexes().CreateMany(context.Background(), []mongo.IndexModel{
+	_, _ = commentLikesCollection.Indexes().CreateMany(context.Background(), []mongo.IndexModel{
 		{
 			Keys:    bson.D{{Key: "commentId", Value: 1}, {Key: "userId", Value: 1}},
 			Options: options.Index().SetUnique(true),
@@ -90,7 +94,7 @@ func (r *Repository) GetCommentByID(ctx context.Context, commentID primitive.Obj
 
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
-			return nil, errors.New("comment not found")
+			return nil, ErrCommentNotFound
 		}
 		return nil, err
 	}
@@ -113,7 +117,7 @@ func (r *Repository) UpdateComment(ctx context.Context, commentID primitive.Obje
 	}
 
 	if result.MatchedCount == 0 {
-		return errors.New("comment not found")
+		return ErrCommentNotFound
 	}
 
 	return nil
@@ -132,14 +136,15 @@ func (r *Repository) SoftDeleteComment(ctx context.Context, commentID primitive.
 	}
 
 	if result.MatchedCount == 0 {
-		return errors.New("comment not found")
+		return ErrCommentNotFound
 	}
 
 	return nil
 }
 
 // GetCommentsByAnchor retrieves comments for an anchor with pagination
-func (r *Repository) GetCommentsByAnchor(ctx context.Context, anchorID primitive.ObjectID, sort string, page, limit int) ([]Comment, int64, error) {
+// Comments by hiddenAuthors (block relationships with the viewer) are excluded in the query.
+func (r *Repository) GetCommentsByAnchor(ctx context.Context, anchorID primitive.ObjectID, hiddenAuthors []primitive.ObjectID, sort string, page, limit int) ([]Comment, int64, error) {
 	// Top-level comments only; replies are fetched per comment ("parentId": nil also matches
 	// comments created before replies existed, which have no parentId field)
 	filter := bson.M{
@@ -147,21 +152,24 @@ func (r *Repository) GetCommentsByAnchor(ctx context.Context, anchorID primitive
 		"parentId":  nil,
 		"deletedAt": nil,
 	}
+	if len(hiddenAuthors) > 0 {
+		filter["userId"] = bson.M{"$nin": hiddenAuthors}
+	}
 
-	// Determine sort order
+	// Determine sort order (_id last, so equal values keep a stable order across pages)
 	var sortOrder bson.D
 	switch sort {
 	case SortOldest:
-		sortOrder = bson.D{{Key: "createdAt", Value: 1}}
+		sortOrder = bson.D{{Key: "createdAt", Value: 1}, {Key: "_id", Value: 1}}
 	case SortTop:
-		sortOrder = bson.D{{Key: "likeCount", Value: -1}, {Key: "createdAt", Value: -1}}
+		sortOrder = bson.D{{Key: "likeCount", Value: -1}, {Key: "createdAt", Value: -1}, {Key: "_id", Value: -1}}
 	default: // newest
-		sortOrder = bson.D{{Key: "createdAt", Value: -1}}
+		sortOrder = bson.D{{Key: "createdAt", Value: -1}, {Key: "_id", Value: -1}}
 	}
 
 	opts := options.Find().
 		SetSort(sortOrder).
-		SetSkip(int64((page - 1) * limit)).
+		SetSkip(int64(page-1) * int64(limit)).
 		SetLimit(int64(limit))
 
 	cursor, err := r.commentsCollection.Find(ctx, filter, opts)
@@ -248,34 +256,22 @@ func (r *Repository) GetUserLikedComments(ctx context.Context, userID primitive.
 	return result, nil
 }
 
-// IncrementCommentLikeCount increments/decrements like count
+// IncrementCommentLikeCount atomically adjusts a comment's like count (never below zero)
 func (r *Repository) IncrementCommentLikeCount(ctx context.Context, commentID primitive.ObjectID, delta int) error {
-	_, err := r.commentsCollection.UpdateOne(
-		ctx,
-		bson.M{"_id": commentID},
-		bson.M{
-			"$inc": bson.M{"likeCount": delta},
-			"$set": bson.M{"updatedAt": time.Now()},
-		},
-	)
-	if err != nil {
-		return err
-	}
-
-	// Ensure count doesn't go negative
+	filter := bson.M{"_id": commentID}
 	if delta < 0 {
-		_, _ = r.commentsCollection.UpdateOne(ctx,
-			bson.M{"_id": commentID, "likeCount": bson.M{"$lt": 0}},
-			bson.M{"$set": bson.M{"likeCount": 0}},
-		)
+		filter["likeCount"] = bson.M{"$gte": -delta}
 	}
-
-	return nil
+	_, err := r.commentsCollection.UpdateOne(ctx, filter, bson.M{"$inc": bson.M{"likeCount": delta}})
+	return err
 }
 
 // GetReplies returns the replies to a top-level comment, oldest first
-func (r *Repository) GetReplies(ctx context.Context, parentID primitive.ObjectID, page, limit int) ([]Comment, int64, error) {
+func (r *Repository) GetReplies(ctx context.Context, parentID primitive.ObjectID, hiddenAuthors []primitive.ObjectID, page, limit int) ([]Comment, int64, error) {
 	filter := bson.M{"parentId": parentID, "deletedAt": nil}
+	if len(hiddenAuthors) > 0 {
+		filter["userId"] = bson.M{"$nin": hiddenAuthors}
+	}
 
 	total, err := r.commentsCollection.CountDocuments(ctx, filter)
 	if err != nil {
@@ -284,7 +280,7 @@ func (r *Repository) GetReplies(ctx context.Context, parentID primitive.ObjectID
 
 	opts := options.Find().
 		SetSort(bson.D{{Key: "createdAt", Value: 1}, {Key: "_id", Value: 1}}).
-		SetSkip(int64((page - 1) * limit)).
+		SetSkip(int64(page-1) * int64(limit)).
 		SetLimit(int64(limit))
 	cursor, err := r.commentsCollection.Find(ctx, filter, opts)
 	if err != nil {

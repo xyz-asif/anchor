@@ -16,14 +16,14 @@ type Follow struct {
 
 // FollowActionRequest for POST /users/:id/follow
 type FollowActionRequest struct {
-	Action string `json:"action" binding:"required,oneof=follow unfollow"`
+	Action string `json:"action"` // "follow" or "unfollow" (checked by ValidateFollowActionRequest)
 }
 
 // FollowListQuery for GET /users/:id/follows
 type FollowListQuery struct {
-	Type  string `form:"type" binding:"required,oneof=followers following"`
-	Page  int    `form:"page,default=1" binding:"min=1"`
-	Limit int    `form:"limit,default=20" binding:"min=1,max=50"`
+	Type  string // "followers" or "following"
+	Page  int
+	Limit int
 }
 
 // FollowActionResponse after follow/unfollow

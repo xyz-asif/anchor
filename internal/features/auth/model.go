@@ -3,6 +3,7 @@ package auth
 import (
 	"time"
 
+	"github.com/xyz-asif/gotodo/internal/pkg/searchterms"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
@@ -32,6 +33,7 @@ type User struct {
 	MutedUsers             []primitive.ObjectID `bson:"mutedUsers,omitempty" json:"-"`      // hidden from my feeds, no notifications from them
 	HiddenAnchors          []primitive.ObjectID `bson:"hiddenAnchors,omitempty" json:"-"`   // "not interested" anchors, hidden from discover/tag feeds
 	TokensRevokedAt        *time.Time           `bson:"tokensRevokedAt,omitempty" json:"-"` // access tokens issued before this are rejected
+	Search                 *searchterms.Fields  `bson:"search,omitempty" json:"-"`          // prefix index used by search
 }
 
 // TokenRevoked reports whether an access token issued at issuedAt was revoked by
@@ -93,6 +95,7 @@ type AuthResponse struct {
 	User         *User  `json:"user"`
 	AccessToken  string `json:"accessToken"`
 	RefreshToken string `json:"refreshToken"`
+	IsNewUser    bool   `json:"isNewUser,omitempty"` // set on Google login when the account was just created
 }
 
 // LoginResponse represents the response for DevLogin

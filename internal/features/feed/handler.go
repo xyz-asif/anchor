@@ -1,13 +1,13 @@
 package feed
 
 import (
-	"net/http"
+	"log"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xyz-asif/gotodo/internal/config"
 	"github.com/xyz-asif/gotodo/internal/features/auth"
 	"github.com/xyz-asif/gotodo/internal/pkg/response"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type Handler struct {
@@ -36,35 +36,22 @@ func NewHandler(service *Service, cfg *config.Config) *Handler {
 // @Failure 401 {object} response.APIResponse
 // @Router /feed/following [get]
 func (h *Handler) GetFollowingFeed(c *gin.Context) {
-	usr, exists := c.Get("user")
-
-	if !exists {
-		response.Error(c, http.StatusUnauthorized, "User not found in context")
-		return
-	}
-	user := usr.(*auth.User)
-
-	var query FeedQuery
-	if err := c.ShouldBindQuery(&query); err != nil {
-		response.Error(c, http.StatusBadRequest, "Invalid query parameters")
+	user := currentUser(c)
+	if user == nil {
+		response.Unauthorized(c, "Please sign in to see your feed", "UNAUTHORIZED")
 		return
 	}
 
-	if err := ValidateFeedQuery(&query); err != nil {
-		response.Error(c, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	if query.Cursor != "" {
-		if _, err := ValidateCursor(query.Cursor); err != nil {
-			response.Error(c, http.StatusBadRequest, err.Error())
-			return
-		}
-	}
-
-	feedResponse, err := h.service.GetHomeFeed(c.Request.Context(), user.ID, &query)
+	query, err := ParseFeedQuery(c.Query("limit"), c.Query("cursor"), c.Query("includeOwn"))
 	if err != nil {
-		response.Error(c, http.StatusInternalServerError, "Failed to retrieve feed")
+		response.BadRequest(c, err.Error(), queryErrorCode(err))
+		return
+	}
+
+	feedResponse, err := h.service.GetHomeFeed(c.Request.Context(), user, query)
+	if err != nil {
+		log.Printf("feed: home feed for %s failed: %v", user.ID.Hex(), err)
+		response.InternalServerError(c, "We couldn't load your feed right now. Please try again", "FEED_FAILED")
 		return
 	}
 
@@ -84,38 +71,16 @@ func (h *Handler) GetFollowingFeed(c *gin.Context) {
 // @Failure 400 {object} response.APIResponse
 // @Router /feed/discover [get]
 func (h *Handler) GetDiscoverFeed(c *gin.Context) {
-	// Get user if authenticated (optional)
-	var userID *primitive.ObjectID
-	if usr, exists := c.Get("user"); exists {
-		if user, ok := usr.(*auth.User); ok {
-			userID = &user.ID
-		}
-	}
-
-	var query DiscoverQuery
-	if err := c.ShouldBindQuery(&query); err != nil {
-		response.Error(c, http.StatusBadRequest, "Invalid query parameters")
-		return
-	}
-
-	if err := ValidateDiscoverQuery(&query); err != nil {
-		response.Error(c, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	if query.Cursor != "" {
-		// Score-sorted categories need a score in the cursor; otherwise no page filter is
-		// applied and the client would get page 1 again forever (e.g. a "recent" cursor reused)
-		if cur, err := DecodeDiscoverCursor(query.Cursor); err != nil ||
-			(cur != nil && query.Category != CategoryRecent && cur.Score == nil) {
-			response.Error(c, http.StatusBadRequest, "Invalid cursor")
-			return
-		}
-	}
-
-	discoverResponse, err := h.service.GetDiscoverFeed(c.Request.Context(), userID, &query)
+	query, err := ParseDiscoverQuery(c.Query("limit"), c.Query("cursor"), c.Query("category"), c.Query("tag"), CategoryTrending)
 	if err != nil {
-		response.Error(c, http.StatusInternalServerError, "Failed to retrieve discovery feed")
+		response.BadRequest(c, err.Error(), queryErrorCode(err))
+		return
+	}
+
+	discoverResponse, err := h.service.GetDiscoverFeed(c.Request.Context(), currentUser(c), query)
+	if err != nil {
+		log.Printf("feed: discover feed failed: %v", err)
+		response.InternalServerError(c, "We couldn't load the discover feed right now. Please try again", "FEED_FAILED")
 		return
 	}
 
@@ -130,58 +95,49 @@ func (h *Handler) GetDiscoverFeed(c *gin.Context) {
 // @Param tagName path string true "Tag name"
 // @Param limit query int false "Items per page (default 20, max 50)"
 // @Param cursor query string false "Pagination cursor"
+// @Param category query string false "Category: popular (default), trending, recent, for_you"
 // @Success 200 {object} response.APIResponse{data=DiscoverResponse}
 // @Failure 400 {object} response.APIResponse
 // @Router /feed/tags/{tagName} [get]
 func (h *Handler) GetTagFeed(c *gin.Context) {
 	tagName := c.Param("tagName")
-	if len(tagName) < 2 {
-		response.Error(c, http.StatusBadRequest, "Invalid tag name")
+	if strings.TrimSpace(tagName) == "" {
+		response.BadRequest(c, "Please say which tag to show, e.g. /feed/tags/travel", "INVALID_TAG")
 		return
 	}
 
-	// Get user if authenticated (optional)
-	var userID *primitive.ObjectID
-	if usr, exists := c.Get("user"); exists {
-		if user, ok := usr.(*auth.User); ok {
-			userID = &user.ID
-		}
-	}
-
-	var query DiscoverQuery
-	if err := c.ShouldBindQuery(&query); err != nil {
-		response.Error(c, http.StatusBadRequest, "Invalid query parameters")
-		return
-	}
-
-	// Force tag from path; a topic page shows everyone's anchors, including people you follow
-	query.Tag = tagName
-	query.IncludeFollowed = true
-	if query.Category == "" {
-		query.Category = "popular" // Default sort for tag feed
-	}
-
-	if err := ValidateDiscoverQuery(&query); err != nil {
-		response.Error(c, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	if query.Cursor != "" {
-		// Score-sorted categories need a score in the cursor; otherwise no page filter is
-		// applied and the client would get page 1 again forever (e.g. a "recent" cursor reused)
-		if cur, err := DecodeDiscoverCursor(query.Cursor); err != nil ||
-			(cur != nil && query.Category != CategoryRecent && cur.Score == nil) {
-			response.Error(c, http.StatusBadRequest, "Invalid cursor")
-			return
-		}
-	}
-
-	// Reuse Discover Feed logic
-	discoverResponse, err := h.service.GetDiscoverFeed(c.Request.Context(), userID, &query)
+	// Popular first by default
+	query, err := ParseDiscoverQuery(c.Query("limit"), c.Query("cursor"), c.Query("category"), tagName, CategoryPopular)
 	if err != nil {
-		response.Error(c, http.StatusInternalServerError, "Failed to retrieve tag feed")
+		response.BadRequest(c, err.Error(), queryErrorCode(err))
+		return
+	}
+	// A topic page shows everyone's anchors, including people you follow and your own
+	query.IncludeFollowed = true
+
+	discoverResponse, err := h.service.GetDiscoverFeed(c.Request.Context(), currentUser(c), query)
+	if err != nil {
+		log.Printf("feed: tag feed %q failed: %v", query.Tag, err)
+		response.InternalServerError(c, "We couldn't load this tag right now. Please try again", "FEED_FAILED")
 		return
 	}
 
 	response.Success(c, discoverResponse)
+}
+
+// currentUser returns the signed-in user, or nil for anonymous requests
+func currentUser(c *gin.Context) *auth.User {
+	if val, exists := c.Get("user"); exists {
+		if user, ok := val.(*auth.User); ok {
+			return user
+		}
+	}
+	return nil
+}
+
+func queryErrorCode(err error) string {
+	if err == errBadCursor {
+		return "INVALID_CURSOR"
+	}
+	return "INVALID_QUERY"
 }

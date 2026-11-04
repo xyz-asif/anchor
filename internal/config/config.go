@@ -33,6 +33,7 @@ type Config struct {
 	RateLimitPerMinute         int      // general per-IP limit for all API routes
 	AuthRateLimitPerMinute     int      // per-IP limit for login/refresh endpoints
 	UploadRateLimitPerMinute   int      // per-IP limit for uploads and link previews
+	PushMode                   string   // fcm | fcm-dry-run | log | off | auto (default: fcm if the Firebase key exists)
 }
 
 // defaultJWTSecret is the placeholder secret; it must never be used in production
@@ -119,6 +120,7 @@ func Load() *Config {
 		RateLimitPerMinute:         getEnvInt("RATE_LIMIT_PER_MINUTE", 300),
 		AuthRateLimitPerMinute:     getEnvInt("AUTH_RATE_LIMIT_PER_MINUTE", 20),
 		UploadRateLimitPerMinute:   getEnvInt("UPLOAD_RATE_LIMIT_PER_MINUTE", 30),
+		PushMode:                   getEnv("PUSH_MODE", "auto"),
 	}
 }
 

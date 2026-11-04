@@ -3,6 +3,7 @@ package anchors
 import (
 	"time"
 
+	"github.com/xyz-asif/gotodo/internal/pkg/searchterms"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
@@ -48,6 +49,9 @@ type Anchor struct {
 	UpdatedAt       time.Time  `bson:"updatedAt" json:"updatedAt"`
 	LastItemAddedAt time.Time  `bson:"lastItemAddedAt" json:"lastItemAddedAt"`
 	DeletedAt       *time.Time `bson:"deletedAt,omitempty" json:"deletedAt,omitempty"`
+
+	// Search is the prefix index used by search (maintained by the repository)
+	Search *searchterms.Fields `bson:"search,omitempty" json:"-"`
 }
 
 // Item represents a single content item within an anchor
@@ -110,9 +114,9 @@ type CreateAnchorRequest struct {
 	Title           string   `json:"title" binding:"required,min=3,max=100"`
 	Description     string   `json:"description" binding:"omitempty,max=500"`
 	CoverMediaType  *string  `json:"coverMediaType" binding:"omitempty,oneof=icon emoji image"`
-	CoverMediaValue *string  `json:"coverMediaValue" binding:"omitempty"`
+	CoverMediaValue *string  `json:"coverMediaValue" binding:"omitempty,max=2048"`
 	Visibility      *string  `json:"visibility" binding:"omitempty,oneof=private unlisted public"`
-	Tags            []string `json:"tags" binding:"omitempty,max=5,dive,min=3,max=20"`
+	Tags            []string `json:"tags"` // checked by NormalizeAndValidateTags
 }
 
 // UpdateAnchorRequest represents the payload for updating an anchor
@@ -120,23 +124,23 @@ type UpdateAnchorRequest struct {
 	Title           *string  `json:"title" binding:"omitempty,min=3,max=100"`
 	Description     *string  `json:"description" binding:"omitempty,max=500"`
 	CoverMediaType  *string  `json:"coverMediaType" binding:"omitempty,oneof=icon emoji image"`
-	CoverMediaValue *string  `json:"coverMediaValue" binding:"omitempty"`
+	CoverMediaValue *string  `json:"coverMediaValue" binding:"omitempty,max=2048"`
 	Visibility      *string  `json:"visibility" binding:"omitempty,oneof=private unlisted public"`
-	Tags            []string `json:"tags" binding:"omitempty,max=5,dive,min=3,max=20"`
+	Tags            []string `json:"tags"` // checked by NormalizeAndValidateTags
 }
 
 // AddItemRequest represents the payload for adding an item to an anchor
 type AddItemRequest struct {
 	Type    string  `json:"type" binding:"required,oneof=url image audio file text"`
-	URL     *string `json:"url" binding:"omitempty"`
-	Content *string `json:"content" binding:"omitempty,max=10000"`
+	URL     *string `json:"url"`     // checked by ValidateURL
+	Content *string `json:"content"` // length checked in characters by ValidateTextContent
 }
 
 // UpdateItemRequest is the payload for editing an item. Text items accept content,
 // URL items accept url (metadata is fetched again). Media items can't be edited.
 type UpdateItemRequest struct {
-	Content *string `json:"content" binding:"omitempty,max=10000"`
-	URL     *string `json:"url" binding:"omitempty"`
+	Content *string `json:"content"` // length checked in characters by ValidateTextContent
+	URL     *string `json:"url"`     // checked by ValidateURL
 }
 
 // CloneAnchorRequest holds optional overrides when cloning an anchor

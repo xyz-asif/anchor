@@ -2,6 +2,7 @@ package users
 
 import (
 	"context"
+	"errors"
 	"math"
 	"strconv"
 	"strings"
@@ -56,9 +57,13 @@ func (h *Handler) GetUserByUsername(c *gin.Context) {
 
 	ctx := c.Request.Context()
 
-	// Get user by username
+	// Get user by username (a DB failure is not "not found")
 	user, err := h.authRepo.GetUserByUsername(ctx, username)
-	if err != nil || user == nil {
+	if err != nil {
+		response.InternalServerError(c, "Failed to load user", "DATABASE_ERROR")
+		return
+	}
+	if user == nil || !auth.CanViewProfile(user, currentViewer(c)) {
 		response.NotFound(c, "User not found", "USER_NOT_FOUND")
 		return
 	}
@@ -108,46 +113,26 @@ func (h *Handler) GetUserByUsername(c *gin.Context) {
 // @Failure 404 {object} response.APIResponse
 // @Router /users/{id}/likes [get]
 func (h *Handler) GetUserLikes(c *gin.Context) {
-	userIDStr := c.Param("id")
-
-	// Handle "me" case (static /users/me/... routes have no :id param)
-	if userIDStr == "" || userIDStr == "me" {
-		currentUser, exists := c.Get("user")
-		if !exists {
-			response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
-			return
-		}
-		user := currentUser.(*auth.User)
-		userIDStr = user.ID.Hex()
-	}
-
-	userID, err := primitive.ObjectIDFromHex(userIDStr)
-	if err != nil {
-		response.BadRequest(c, "Invalid user ID", "INVALID_ID")
+	target, viewer, ok := h.resolveTargetUser(c)
+	if !ok {
 		return
 	}
-
-	// Parse pagination
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
-	if page < 1 {
-		page = 1
-	}
-	if limit < 1 || limit > 50 {
-		limit = 20
-	}
-
+	userID := target.ID
+	page, limit := parsePaging(c)
 	ctx := c.Request.Context()
 
-	// Check user exists
-	user, err := h.authRepo.GetUserByID(ctx, userIDStr)
-	if err != nil || user == nil {
-		response.NotFound(c, "User not found", "USER_NOT_FOUND")
+	// Likes on anchors this viewer may not see (private, unlisted, deleted, or by users in a
+	// block relationship with the viewer) are excluded in the query, so totals and pages agree
+	hidden, err := h.authRepo.HiddenUserIDs(ctx, viewer)
+	if err != nil {
+		response.InternalServerError(c, "Failed to fetch liked anchors", "FETCH_FAILED")
 		return
 	}
-
-	// Get likes
-	likesList, total, err := h.likesRepo.GetUserLikedAnchorsPaginated(ctx, userID, page, limit)
+	var viewerID *primitive.ObjectID
+	if viewer != nil {
+		viewerID = &viewer.ID
+	}
+	likesList, total, err := h.likesRepo.GetVisibleUserLikes(ctx, userID, viewerID, hidden, page, limit)
 	if err != nil {
 		response.InternalServerError(c, "Failed to fetch liked anchors", "FETCH_FAILED")
 		return
@@ -160,7 +145,11 @@ func (h *Handler) GetUserLikes(c *gin.Context) {
 	}
 
 	// Batch fetch anchors
-	anchorsList, _ := h.anchorsRepo.GetAnchorsByIDs(ctx, anchorIDs)
+	anchorsList, err := h.anchorsRepo.GetAnchorsByIDs(ctx, anchorIDs)
+	if err != nil {
+		response.InternalServerError(c, "Failed to fetch liked anchors", "FETCH_FAILED")
+		return
+	}
 	anchorsMap := make(map[primitive.ObjectID]*anchors.Anchor)
 	authorIDs := make([]primitive.ObjectID, 0)
 	for i := range anchorsList {
@@ -169,7 +158,11 @@ func (h *Handler) GetUserLikes(c *gin.Context) {
 	}
 
 	// Batch fetch authors
-	authorsList, _ := h.authRepo.GetUsersByIDs(ctx, authorIDs)
+	authorsList, err := h.authRepo.GetUsersByIDs(ctx, authorIDs)
+	if err != nil {
+		response.InternalServerError(c, "Failed to fetch liked anchors", "FETCH_FAILED")
+		return
+	}
 	authorsMap := make(map[primitive.ObjectID]*auth.User)
 	for i := range authorsList {
 		authorsMap[authorsList[i].ID] = &authorsList[i]
@@ -184,7 +177,7 @@ func (h *Handler) GetUserLikes(c *gin.Context) {
 		}
 		// Liked lists are visible to others: only public anchors, plus the viewer's own
 		// (private and link-only unlisted anchors must not leak through someone's likes)
-		if anchor.Visibility != anchors.VisibilityPublic && !isViewer(c, anchor.UserID) {
+		if !canSeeAnchor(anchor, viewer) {
 			continue
 		}
 
@@ -236,46 +229,16 @@ func (h *Handler) GetUserLikes(c *gin.Context) {
 // @Failure 404 {object} response.APIResponse
 // @Router /users/{id}/clones [get]
 func (h *Handler) GetUserClones(c *gin.Context) {
-	userIDStr := c.Param("id")
-
-	// Handle "me" case (static /users/me/... routes have no :id param)
-	if userIDStr == "" || userIDStr == "me" {
-		currentUser, exists := c.Get("user")
-		if !exists {
-			response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
-			return
-		}
-		user := currentUser.(*auth.User)
-		userIDStr = user.ID.Hex()
-	}
-
-	userID, err := primitive.ObjectIDFromHex(userIDStr)
-	if err != nil {
-		response.BadRequest(c, "Invalid user ID", "INVALID_ID")
+	target, viewer, ok := h.resolveTargetUser(c)
+	if !ok {
 		return
 	}
-
-	// Parse pagination
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
-	if page < 1 {
-		page = 1
-	}
-	if limit < 1 || limit > 50 {
-		limit = 20
-	}
-
+	userID := target.ID
+	page, limit := parsePaging(c)
 	ctx := c.Request.Context()
 
-	// Check user exists
-	user, err := h.authRepo.GetUserByID(ctx, userIDStr)
-	if err != nil || user == nil {
-		response.NotFound(c, "User not found", "USER_NOT_FOUND")
-		return
-	}
-
 	// Get cloned anchors (isClone=true, userId=userID)
-	clones, total, err := h.anchorsRepo.GetUserClonedAnchors(ctx, userID, page, limit, isOwnProfile(c, userID))
+	clones, total, err := h.anchorsRepo.GetUserClonedAnchors(ctx, userID, page, limit, viewer != nil && viewer.ID == userID)
 	if err != nil {
 		response.InternalServerError(c, "Failed to fetch cloned anchors", "FETCH_FAILED")
 		return
@@ -290,7 +253,11 @@ func (h *Handler) GetUserClones(c *gin.Context) {
 	}
 
 	// Batch fetch original anchors
-	originals, _ := h.anchorsRepo.GetAnchorsByIDs(ctx, originalIDs)
+	originals, err := h.anchorsRepo.GetAnchorsByIDs(ctx, originalIDs)
+	if err != nil {
+		response.InternalServerError(c, "Failed to fetch cloned anchors", "FETCH_FAILED")
+		return
+	}
 	originalsMap := make(map[primitive.ObjectID]*anchors.Anchor)
 	authorIDs := make([]primitive.ObjectID, 0)
 	for i := range originals {
@@ -299,7 +266,11 @@ func (h *Handler) GetUserClones(c *gin.Context) {
 	}
 
 	// Batch fetch authors
-	authors, _ := h.authRepo.GetUsersByIDs(ctx, authorIDs)
+	authors, err := h.authRepo.GetUsersByIDs(ctx, authorIDs)
+	if err != nil {
+		response.InternalServerError(c, "Failed to fetch cloned anchors", "FETCH_FAILED")
+		return
+	}
 	authorsMap := make(map[primitive.ObjectID]*auth.User)
 	for i := range authors {
 		authorsMap[authors[i].ID] = &authors[i]
@@ -315,19 +286,24 @@ func (h *Handler) GetUserClones(c *gin.Context) {
 			"itemCount":          clone.ItemCount,
 			"likeCount":          clone.LikeCount,
 			"isClone":            true,
-			"clonedFromAnchorId": clone.ClonedFromAnchorID,
+			"clonedFromAnchorId": nil,
 			"clonedAt":           clone.CreatedAt,
 		}
 
-		// Add original author info if available
+		// The original's ID and author are shown only when the viewer could open the original
+		// itself: an unlisted anchor's ID is its secret link, and a private one is nobody's business
 		if clone.ClonedFromAnchorID != nil {
-			if orig, ok := originalsMap[*clone.ClonedFromAnchorID]; ok {
-				if author, ok := authorsMap[orig.UserID]; ok {
-					item["originalAuthor"] = gin.H{
-						"id":          author.ID,
-						"username":    author.Username,
-						"displayName": author.DisplayName,
-					}
+			orig, ok := originalsMap[*clone.ClonedFromAnchorID]
+			author, authorOK := (*auth.User)(nil), false
+			if ok {
+				author, authorOK = authorsMap[orig.UserID]
+			}
+			if ok && authorOK && canSeeAnchor(orig, viewer) && auth.CanViewProfile(author, viewer) {
+				item["clonedFromAnchorId"] = orig.ID
+				item["originalAuthor"] = gin.H{
+					"id":          author.ID,
+					"username":    author.Username,
+					"displayName": author.DisplayName,
 				}
 			}
 		}
@@ -349,17 +325,79 @@ func (h *Handler) GetUserClones(c *gin.Context) {
 	})
 }
 
-// isOwnProfile reports whether the authenticated user (if any) is the given user
-func isOwnProfile(c *gin.Context, userID primitive.ObjectID) bool {
-	val, exists := c.Get("user")
-	if !exists {
-		return false
+// maxPage bounds the page number so (page-1)*limit can't overflow or force huge skips
+const maxPage = 10000
+
+// parsePaging reads page (default 1) and limit (default 20, max 50) from the query
+func parsePaging(c *gin.Context) (page, limit int) {
+	page, _ = strconv.Atoi(c.DefaultQuery("page", "1"))
+	limit, _ = strconv.Atoi(c.DefaultQuery("limit", "20"))
+	if page < 1 {
+		page = 1
 	}
-	user, ok := val.(*auth.User)
-	return ok && user.ID == userID
+	if page > maxPage {
+		page = maxPage
+	}
+	if limit < 1 || limit > 50 {
+		limit = 20
+	}
+	return page, limit
 }
 
-// isViewer reports whether the authenticated user (if any) is userID
-func isViewer(c *gin.Context, userID primitive.ObjectID) bool {
-	return isOwnProfile(c, userID)
+// currentViewer returns the authenticated user, or nil for anonymous requests
+func currentViewer(c *gin.Context) *auth.User {
+	if val, exists := c.Get("user"); exists {
+		if user, ok := val.(*auth.User); ok {
+			return user
+		}
+	}
+	return nil
+}
+
+// resolveTargetUser resolves the :id path parameter (or the viewer for /users/me/... routes)
+// to a user the viewer is allowed to see. On failure it writes the response and returns ok=false.
+func (h *Handler) resolveTargetUser(c *gin.Context) (target, viewer *auth.User, ok bool) {
+	viewer = currentViewer(c)
+	userIDStr := c.Param("id")
+	if userIDStr == "" || userIDStr == "me" {
+		if viewer == nil {
+			response.Unauthorized(c, "Authentication required", "UNAUTHORIZED")
+			return nil, nil, false
+		}
+		return viewer, viewer, true
+	}
+
+	userID, err := primitive.ObjectIDFromHex(userIDStr)
+	if err != nil {
+		response.BadRequest(c, "Invalid user ID", "INVALID_ID")
+		return nil, nil, false
+	}
+	target, err = h.authRepo.GetUserByObjectID(c.Request.Context(), userID)
+	if err != nil {
+		if errors.Is(err, auth.ErrUserNotFound) {
+			response.NotFound(c, "User not found", "USER_NOT_FOUND")
+		} else {
+			response.InternalServerError(c, "Failed to load user", "DATABASE_ERROR")
+		}
+		return nil, nil, false
+	}
+	if !auth.CanViewProfile(target, viewer) {
+		response.NotFound(c, "User not found", "USER_NOT_FOUND")
+		return nil, nil, false
+	}
+	return target, viewer, true
+}
+
+// canSeeAnchor reports whether viewer (nil = anonymous) may open the anchor by itself
+func canSeeAnchor(a *anchors.Anchor, viewer *auth.User) bool {
+	if a.DeletedAt != nil {
+		return false
+	}
+	if viewer != nil && viewer.ID == a.UserID {
+		return true
+	}
+	if a.Visibility != anchors.VisibilityPublic {
+		return false
+	}
+	return viewer == nil || (!viewer.HasBlocked(a.UserID))
 }

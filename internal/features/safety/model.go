@@ -20,7 +20,18 @@ type Report struct {
 	ReviewedBy     *primitive.ObjectID `bson:"reviewedBy,omitempty" json:"reviewedBy,omitempty"`
 	ReviewedAt     *time.Time          `bson:"reviewedAt,omitempty" json:"reviewedAt,omitempty"`
 	ResolutionNote string              `bson:"resolutionNote,omitempty" json:"resolutionNote,omitempty"`
+
+	// Open is true while pending or reviewed; one open report per reporter and target
+	Open bool `bson:"open" json:"-"`
 }
+
+// Report target types
+const (
+	TargetAnchor  = "anchor"
+	TargetItem    = "item"
+	TargetComment = "comment"
+	TargetUser    = "user"
+)
 
 // Report statuses
 const (
@@ -30,24 +41,25 @@ const (
 	ReportStatusDismissed = "dismissed" // report was not valid
 )
 
-// UpdateReportRequest is the admin payload for moderating a report
+// UpdateReportRequest is the admin payload for moderating a report (checked by the handler)
 type UpdateReportRequest struct {
-	Status string `json:"status" binding:"required,oneof=pending reviewed actioned dismissed"`
-	Note   string `json:"note" binding:"omitempty,max=1000"`
+	Status string `json:"status"`
+	Note   string `json:"note"`
 }
 
-// ReportListQuery holds admin list filters
+// ReportListQuery holds admin list filters (parsed by parseReportListQuery)
 type ReportListQuery struct {
-	Status     string `form:"status" binding:"omitempty,oneof=pending reviewed actioned dismissed"`
-	TargetType string `form:"targetType" binding:"omitempty,oneof=anchor item user"`
-	Page       int    `form:"page,default=1" binding:"min=1"`
-	Limit      int    `form:"limit,default=20" binding:"min=1,max=100"`
+	Status     string
+	TargetType string
+	Page       int
+	Limit      int
 }
 
+// CreateReportRequest reports an anchor, item, comment or user (checked by the handler)
 type CreateReportRequest struct {
-	TargetID   string `json:"targetId" binding:"required"`
-	TargetType string `json:"targetType" binding:"required,oneof=anchor item user"`
-	Reason     string `json:"reason" binding:"required,min=5,max=500"`
+	TargetID   string `json:"targetId"`
+	TargetType string `json:"targetType"`
+	Reason     string `json:"reason"`
 }
 
 type BlockUserRequest struct {
@@ -56,5 +68,5 @@ type BlockUserRequest struct {
 
 // SetVerificationRequest is the admin payload for granting/removing the verified badge
 type SetVerificationRequest struct {
-	IsVerified *bool `json:"isVerified" binding:"required"`
+	IsVerified *bool `json:"isVerified" binding:"required"` // true or false
 }

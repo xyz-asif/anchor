@@ -3,21 +3,23 @@ package anchors
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"math"
 	"net/http"
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xyz-asif/gotodo/internal/config"
 	"github.com/xyz-asif/gotodo/internal/features/auth"
 	"github.com/xyz-asif/gotodo/internal/features/notifications"
+	"github.com/xyz-asif/gotodo/internal/pkg/bind"
 	"github.com/xyz-asif/gotodo/internal/pkg/cloudinary"
 	"github.com/xyz-asif/gotodo/internal/pkg/response"
-	"github.com/xyz-asif/gotodo/internal/pkg/tags"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -53,6 +55,9 @@ func NewHandler(repo *Repository, authRepo *auth.Repository, notificationService
 	}
 }
 
+// maxPinnedAnchors is how many anchors a user can pin to their profile
+const maxPinnedAnchors = 3
+
 // CreateAnchor handles the creation of a new anchor
 // @Summary Create a new anchor
 // @Description Create a new anchor for the authenticated user
@@ -66,75 +71,66 @@ func NewHandler(repo *Repository, authRepo *auth.Repository, notificationService
 // @Failure 401 {object} response.APIResponse
 // @Router /anchors [post]
 func (h *Handler) CreateAnchor(c *gin.Context) {
-	var req CreateAnchorRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "Invalid request format", "INVALID_JSON")
-		return
-	}
-
-	val, exists := c.Get("user")
-	if !exists {
-		response.Unauthorized(c, "Authentication required", "AUTH_FAILED")
-		return
-	}
-	user, ok := val.(*auth.User)
+	user, ok := requireUser(c, "create an anchor")
 	if !ok {
-		response.InternalServerError(c, "User context error", "INTERNAL_ERROR")
+		return
+	}
+	var req CreateAnchorRequest
+	if !bind.JSON(c, &req) {
 		return
 	}
 
-	// Validate title length
-	if n := utf8.RuneCountInString(req.Title); n < 3 || n > 100 {
-		response.BadRequest(c, "Title must be between 3 and 100 characters", "VALIDATION_FAILED")
+	title := strings.TrimSpace(req.Title)
+	if err := ValidateAnchorTitle(title); err != nil {
+		response.BadRequest(c, err.Error(), "VALIDATION_FAILED")
+		return
+	}
+	description := strings.TrimSpace(req.Description)
+	if err := ValidateDescription(description); err != nil {
+		response.BadRequest(c, err.Error(), "VALIDATION_FAILED")
 		return
 	}
 
-	// Default visibility if invalid
 	visibility := VisibilityPublic
 	if req.Visibility != nil {
-		v := *req.Visibility
-		if v == VisibilityPublic || v == VisibilityPrivate || v == VisibilityUnlisted {
-			visibility = v
-		}
+		visibility = *req.Visibility // checked by the binding's oneof rule
 	}
 
-	var coverMediaType, coverMediaValue string
+	var coverType, coverValue string
 	if req.CoverMediaType != nil {
-		coverMediaType = *req.CoverMediaType
+		coverType = *req.CoverMediaType
 	}
 	if req.CoverMediaValue != nil {
-		coverMediaValue = *req.CoverMediaValue
+		coverValue = strings.TrimSpace(*req.CoverMediaValue)
+	}
+	if err := ValidateCover(coverType, coverValue); err != nil {
+		response.BadRequest(c, err.Error(), "VALIDATION_FAILED")
+		return
 	}
 
-	// Normalize tags
-	if req.Tags != nil {
-		req.Tags = normalizeTags(req.Tags)
+	tagList, err := NormalizeAndValidateTags(req.Tags)
+	if err != nil {
+		response.BadRequest(c, err.Error(), "VALIDATION_FAILED")
+		return
 	}
 
 	anchor := &Anchor{
 		UserID:          user.ID,
-		Title:           req.Title,
-		Description:     req.Description,
-		CoverMediaType:  coverMediaType,
-		CoverMediaValue: coverMediaValue,
+		Title:           title,
+		Description:     description,
+		CoverMediaType:  coverType,
+		CoverMediaValue: coverValue,
 		Visibility:      visibility,
-		Tags:            req.Tags,
-		ItemCount:       0,
-		LikeCount:       0,
-		CloneCount:      0,
-		IsPinned:        false,
-		CreatedAt:       time.Now(), // Ensure created time
-		UpdatedAt:       time.Now(),
+		Tags:            tagList,
 	}
 
 	if err := h.repo.CreateAnchor(c.Request.Context(), anchor); err != nil {
-		response.InternalServerError(c, "Failed to create anchor", "DATABASE_ERROR")
+		log.Printf("anchors: create failed: %v", err)
+		response.InternalServerError(c, "We couldn't create your anchor right now. Please try again", "DATABASE_ERROR")
 		return
 	}
 
-	// Increment user's anchor count
 	if err := h.authRepo.IncrementAnchorCount(c.Request.Context(), user.ID, 1); err != nil {
-		// Log error but don't fail request as anchor was created
 		log.Printf("Failed to increment anchor count for user %s: %v", user.ID.Hex(), err)
 	}
 
@@ -156,95 +152,97 @@ func (h *Handler) CreateAnchor(c *gin.Context) {
 // @Failure 404 {object} response.APIResponse
 // @Router /anchors/{id} [patch]
 func (h *Handler) UpdateAnchor(c *gin.Context) {
-	anchorIDStr := c.Param("id")
-	anchorID, err := primitive.ObjectIDFromHex(anchorIDStr)
-	if err != nil {
-		response.BadRequest(c, "Invalid anchor ID", "INVALID_ID")
-		return
-	}
-
-	var req UpdateAnchorRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "Invalid request format", "INVALID_JSON")
-		return
-	}
-
-	val, exists := c.Get("user")
-	if !exists {
-		response.Unauthorized(c, "Authentication required", "AUTH_FAILED")
-		return
-	}
-	user, ok := val.(*auth.User)
+	user, ok := requireUser(c, "edit an anchor")
 	if !ok {
-		response.InternalServerError(c, "User context error", "INTERNAL_ERROR")
+		return
+	}
+	anchor, ok := h.loadOwnedAnchor(c, user)
+	if !ok {
+		return
+	}
+	var req UpdateAnchorRequest
+	if !bind.JSON(c, &req) {
 		return
 	}
 
-	// Verify ownership
-	anchor, err := h.repo.GetAnchorByID(c.Request.Context(), anchorID)
-	if err != nil || anchor.DeletedAt != nil {
-		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
-		return
-	}
-
-	if anchor.UserID != user.ID {
-		response.Forbidden(c, "You do not have permission to update this anchor")
-		return
-	}
-
-	updates := make(map[string]interface{})
+	updates := bson.M{}
 	if req.Title != nil {
-		if n := utf8.RuneCountInString(*req.Title); n < 3 || n > 100 {
-			response.BadRequest(c, "Title must be between 3 and 100 characters", "VALIDATION_FAILED")
+		title := strings.TrimSpace(*req.Title)
+		if err := ValidateAnchorTitle(title); err != nil {
+			response.BadRequest(c, err.Error(), "VALIDATION_FAILED")
 			return
 		}
-		updates["title"] = *req.Title
+		updates["title"] = title
 	}
 	if req.Description != nil {
-		updates["description"] = *req.Description
+		description := strings.TrimSpace(*req.Description)
+		if err := ValidateDescription(description); err != nil {
+			response.BadRequest(c, err.Error(), "VALIDATION_FAILED")
+			return
+		}
+		updates["description"] = description
 	}
-	if req.CoverMediaType != nil {
-		updates["coverMediaType"] = *req.CoverMediaType
-	}
-	if req.CoverMediaValue != nil {
-		updates["coverMediaValue"] = *req.CoverMediaValue
+	if req.CoverMediaType != nil || req.CoverMediaValue != nil {
+		// The cover's type and value must still fit together after the change
+		coverType, coverValue := anchor.CoverMediaType, anchor.CoverMediaValue
+		if req.CoverMediaType != nil {
+			coverType = *req.CoverMediaType
+		}
+		if req.CoverMediaValue != nil {
+			coverValue = strings.TrimSpace(*req.CoverMediaValue)
+		}
+		if coverType == "" {
+			coverValue = "" // removing the cover type removes the cover
+		}
+		if err := ValidateCover(coverType, coverValue); err != nil {
+			response.BadRequest(c, err.Error(), "VALIDATION_FAILED")
+			return
+		}
+		updates["coverMediaType"] = coverType
+		updates["coverMediaValue"] = coverValue
 	}
 	if req.Visibility != nil {
 		updates["visibility"] = *req.Visibility
 	}
 	if req.Tags != nil {
-		updates["tags"] = normalizeTags(req.Tags)
+		tagList, err := NormalizeAndValidateTags(req.Tags)
+		if err != nil {
+			response.BadRequest(c, err.Error(), "VALIDATION_FAILED")
+			return
+		}
+		updates["tags"] = tagList
 	}
 
 	if len(updates) == 0 {
 		response.Success(c, anchor)
 		return
 	}
-
 	updates["updatedAt"] = time.Now()
 
-	if err := h.repo.UpdateAnchor(c.Request.Context(), anchorID, updates); err != nil {
-		response.InternalServerError(c, "Failed to update anchor", "DATABASE_ERROR")
+	ctx := c.Request.Context()
+	if err := h.repo.UpdateAnchor(ctx, anchor.ID, updates); err != nil {
+		log.Printf("anchors: update %s failed: %v", anchor.ID.Hex(), err)
+		response.InternalServerError(c, "We couldn't save your changes right now. Please try again", "DATABASE_ERROR")
 		return
 	}
 
-	// Fetch updated
-	updatedAnchor, err := h.repo.GetAnchorByID(c.Request.Context(), anchorID)
+	updatedAnchor, err := h.repo.GetAnchorByID(ctx, anchor.ID)
 	if err != nil {
-		response.InternalServerError(c, "Failed to fetch updated anchor", "DATABASE_ERROR")
+		log.Printf("anchors: re-reading %s failed: %v", anchor.ID.Hex(), err)
+		response.InternalServerError(c, "Your changes were saved, but we couldn't load the updated anchor. Please refresh", "DATABASE_ERROR")
 		return
 	}
 
 	response.Success(c, updatedAnchor)
 }
 
-// normalizeTags converts tags to lowercase and trims whitespace
+// normalizeTags converts tags to the canonical form shared with interests and tag feeds
 func normalizeTags(raw []string) []string {
 	if raw == nil {
 		return nil
 	}
-	// Same rules as interests and tag feeds, so they always match each other
-	return tags.NormalizeList(raw)
+	tagList, _ := NormalizeAndValidateTags(raw)
+	return tagList
 }
 
 // DeleteAnchor soft deletes an anchor
@@ -259,58 +257,38 @@ func normalizeTags(raw []string) []string {
 // @Failure 404 {object} response.APIResponse
 // @Router /anchors/{id} [delete]
 func (h *Handler) DeleteAnchor(c *gin.Context) {
-	anchorIDStr := c.Param("id")
-	anchorID, err := primitive.ObjectIDFromHex(anchorIDStr)
-	if err != nil {
-		response.BadRequest(c, "Invalid anchor ID", "INVALID_ID")
-		return
-	}
-
-	val, exists := c.Get("user")
-	if !exists {
-		response.Unauthorized(c, "Authentication required", "AUTH_FAILED")
-		return
-	}
-	user, ok := val.(*auth.User)
+	user, ok := requireUser(c, "delete an anchor")
 	if !ok {
-		response.InternalServerError(c, "User context error", "INTERNAL_ERROR")
 		return
 	}
-
-	// Verify ownership
-	anchor, err := h.repo.GetAnchorByID(c.Request.Context(), anchorID)
-	if err != nil {
-		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
+	anchor, ok := h.loadOwnedAnchor(c, user)
+	if !ok {
 		return
 	}
+	ctx := c.Request.Context()
 
-	if anchor.DeletedAt != nil {
-		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
-		return
-	}
-
-	if anchor.UserID != user.ID {
-		response.Forbidden(c, "You do not have permission to delete this anchor")
-		return
-	}
-
-	if err := h.repo.SoftDeleteAnchor(c.Request.Context(), anchorID); err != nil {
-		response.InternalServerError(c, "Failed to delete anchor", "DATABASE_ERROR")
+	// Atomic: of two concurrent deletes only one succeeds, so counters change once
+	if err := h.repo.SoftDeleteAnchor(ctx, anchor.ID); err != nil {
+		if errors.Is(err, ErrAnchorNotFound) {
+			response.NotFound(c, "This anchor has already been deleted", "ANCHOR_NOT_FOUND")
+			return
+		}
+		log.Printf("anchors: delete %s failed: %v", anchor.ID.Hex(), err)
+		response.InternalServerError(c, "We couldn't delete this anchor right now. Please try again", "DATABASE_ERROR")
 		return
 	}
 
 	// Deleting a clone lowers the original's clone count (and therefore its ranking score)
 	if anchor.ClonedFromAnchorID != nil {
-		if err := h.repo.IncrementCloneCount(c.Request.Context(), *anchor.ClonedFromAnchorID, -1); err != nil {
+		if err := h.repo.IncrementCloneCount(ctx, *anchor.ClonedFromAnchorID, -1); err != nil {
 			log.Printf("Failed to decrement clone count for anchor %s: %v", anchor.ClonedFromAnchorID.Hex(), err)
 		}
-		if err := h.repo.UpdateEngagementScore(c.Request.Context(), *anchor.ClonedFromAnchorID); err != nil {
+		if err := h.repo.UpdateEngagementScore(ctx, *anchor.ClonedFromAnchorID); err != nil {
 			log.Printf("Failed to update engagement score for anchor %s: %v", anchor.ClonedFromAnchorID.Hex(), err)
 		}
 	}
 
-	// Decrement user's anchor count
-	if err := h.authRepo.IncrementAnchorCount(c.Request.Context(), user.ID, -1); err != nil {
+	if err := h.authRepo.IncrementAnchorCount(ctx, user.ID, -1); err != nil {
 		log.Printf("Failed to decrement anchor count for user %s: %v", user.ID.Hex(), err)
 	}
 
@@ -327,54 +305,45 @@ func (h *Handler) DeleteAnchor(c *gin.Context) {
 // @Failure 404 {object} response.APIResponse
 // @Router /anchors/{id} [get]
 func (h *Handler) GetAnchor(c *gin.Context) {
-	anchorIDStr := c.Param("id")
-	anchorID, err := primitive.ObjectIDFromHex(anchorIDStr)
+	anchor, ok := h.loadViewableAnchor(c)
+	if !ok {
+		return
+	}
+	ctx := c.Request.Context()
+	viewer := currentUser(c)
+
+	items, err := h.repo.GetAnchorItems(ctx, anchor.ID)
 	if err != nil {
-		response.BadRequest(c, "Invalid anchor ID", "INVALID_ID")
+		log.Printf("anchors: items of %s failed: %v", anchor.ID.Hex(), err)
+		response.InternalServerError(c, "We couldn't load this anchor's items right now. Please try again", "DATABASE_ERROR")
 		return
 	}
-
-	anchor, err := h.repo.GetAnchorByID(c.Request.Context(), anchorID)
-	if err != nil {
-		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
-		return
+	if items == nil {
+		items = []Item{}
 	}
 
-	// Access control: deleted -> 404, someone else's private anchor -> 401/403
-	if !ensureAccess(c, anchor) {
+	if err := h.hideCloneSources(ctx, viewer, []*Anchor{anchor}); err != nil {
+		log.Printf("anchors: clone source check failed: %v", err)
+		response.InternalServerError(c, msgTryAgain, "DATABASE_ERROR")
 		return
-	}
-
-	// Get items
-	items, err := h.repo.GetAnchorItems(c.Request.Context(), anchorID)
-	if err != nil {
-		response.InternalServerError(c, "Failed to fetch anchor items", "DATABASE_ERROR")
-		return
-	}
-
-	// Build response
-	anchorResponse := AnchorWithItemsResponse{
-		Anchor: *anchor,
-		Items:  items,
 	}
 
 	// Update last seen version for authenticated user (async)
-	if val, exists := c.Get("user"); exists {
-		if user, ok := val.(*auth.User); ok {
-			go func(uid, aid primitive.ObjectID, ver int) {
-				if h.anchorFollowService != nil {
-					_ = h.anchorFollowService.UpdateLastSeenVersion(context.Background(), uid, aid, ver)
-				}
-			}(user.ID, anchorID, anchor.Version)
-		}
+	if viewer != nil && h.anchorFollowService != nil {
+		go func(uid, aid primitive.ObjectID, ver int) {
+			_ = h.anchorFollowService.UpdateLastSeenVersion(context.Background(), uid, aid, ver)
+		}(viewer.ID, anchor.ID, anchor.Version)
 	}
 
-	response.Success(c, anchorResponse)
+	response.Success(c, AnchorWithItemsResponse{
+		Anchor: *anchor,
+		Items:  items,
+	})
 }
 
 // ListUserAnchors lists anchors for a user
 // @Summary List user anchors
-// @Description List anchors for a user (public/unlisted)
+// @Description List a user's anchors: all of them for the owner, public ones for everyone else
 // @Tags anchors
 // @Produce json
 // @Param userId query string true "User ID"
@@ -385,84 +354,85 @@ func (h *Handler) GetAnchor(c *gin.Context) {
 func (h *Handler) ListUserAnchors(c *gin.Context) {
 	userIDStr := c.Query("userId")
 	if userIDStr == "" {
-		response.BadRequest(c, "userId is required", "MISSING_PARAM")
+		response.BadRequest(c, "Please say whose anchors to list: add ?userId=<user ID>", "MISSING_PARAM")
 		return
 	}
-
 	userID, err := primitive.ObjectIDFromHex(userIDStr)
 	if err != nil {
-		response.BadRequest(c, "Invalid user ID", "INVALID_ID")
+		response.BadRequest(c, `"`+userIDStr+`" isn't a valid user ID`, "INVALID_ID")
 		return
 	}
 
 	page, limit := pageParams(c, 10, 50)
+	ctx := c.Request.Context()
+	viewer := currentUser(c)
+	isOwner := viewer != nil && viewer.ID == userID
 
-	var anchors []Anchor
-	var total int64
-
-	// Determine if viewer is owner
-	isOwner := false
-	if val, exists := c.Get("user"); exists {
-		if currentUser, ok := val.(*auth.User); ok && currentUser.ID == userID {
-			isOwner = true
+	// Someone who blocked the viewer looks like they don't exist, here as on their profile
+	if viewer != nil && !isOwner {
+		blocked, err := h.authRepo.UserHasBlocked(ctx, userID, viewer.ID)
+		if err != nil {
+			log.Printf("anchors: block check failed: %v", err)
+			response.InternalServerError(c, msgTryAgain, "DATABASE_ERROR")
+			return
+		}
+		if blocked {
+			response.NotFound(c, "This user doesn't exist or has deleted their account", "USER_NOT_FOUND")
+			return
 		}
 	}
 
+	var anchors []Anchor
+	var total int64
 	if isOwner {
-		anchors, total, err = h.repo.GetUserAnchors(c.Request.Context(), userID, page, limit)
+		anchors, total, err = h.repo.GetUserAnchors(ctx, userID, page, limit)
 	} else {
-		anchors, total, err = h.repo.GetPublicUserAnchors(c.Request.Context(), userID, page, limit)
+		anchors, total, err = h.repo.GetPublicUserAnchors(ctx, userID, page, limit)
+	}
+	if err != nil {
+		log.Printf("anchors: listing anchors of %s failed: %v", userID.Hex(), err)
+		response.InternalServerError(c, "We couldn't load these anchors right now. Please try again", "DATABASE_ERROR")
+		return
+	}
+	if anchors == nil {
+		anchors = []Anchor{}
 	}
 
-	if err != nil {
-		response.InternalServerError(c, "Failed to fetch anchors", "DATABASE_ERROR")
+	ptrs := make([]*Anchor, len(anchors))
+	for i := range anchors {
+		ptrs[i] = &anchors[i]
+	}
+	if err := h.hideCloneSources(ctx, viewer, ptrs); err != nil {
+		log.Printf("anchors: clone source check failed: %v", err)
+		response.InternalServerError(c, msgTryAgain, "DATABASE_ERROR")
 		return
 	}
 
-	response.Success(c, PaginatedResponse{
-		Data: anchors,
-		Pagination: struct { // This assumes PaginatedResponse structure matches model
-			Page       int   `json:"page"`
-			Limit      int   `json:"limit"`
-			Total      int64 `json:"total"`
-			TotalPages int   `json:"totalPages"`
-			HasMore    bool  `json:"hasMore"`
-		}{
-			Page:       page,
-			Limit:      limit,
-			Total:      total,
-			TotalPages: int((total + int64(limit) - 1) / int64(limit)),
-			HasMore:    int64(page*limit) < total,
-		},
-	})
+	resp := PaginatedResponse{Data: anchors}
+	resp.Pagination.Page = page
+	resp.Pagination.Limit = limit
+	resp.Pagination.Total = total
+	resp.Pagination.TotalPages = int((total + int64(limit) - 1) / int64(limit))
+	resp.Pagination.HasMore = int64(page)*int64(limit) < total
+	response.Success(c, resp)
 }
 
 // ListAnchorItems lists items for an anchor with pagination
 func (h *Handler) ListAnchorItems(c *gin.Context) {
-	anchorIDStr := c.Param("id")
-	anchorID, err := primitive.ObjectIDFromHex(anchorIDStr)
-	if err != nil {
-		response.BadRequest(c, "Invalid anchor ID", "INVALID_ID")
+	anchor, ok := h.loadViewableAnchor(c)
+	if !ok {
 		return
 	}
-
 	page, limit := pageParams(c, 20, 100)
 
-	anchor, err := h.repo.GetAnchorByID(c.Request.Context(), anchorID)
+	items, total, err := h.repo.GetAnchorItemsPaginated(c.Request.Context(), anchor.ID, page, limit)
 	if err != nil {
-		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
+		log.Printf("anchors: items page of %s failed: %v", anchor.ID.Hex(), err)
+		response.InternalServerError(c, "We couldn't load this anchor's items right now. Please try again", "DATABASE_ERROR")
 		return
 	}
-
-	// Access control: deleted -> 404, someone else's private anchor -> 401/403
-	if !ensureAccess(c, anchor) {
-		return
-	}
-
-	items, total, err := h.repo.GetAnchorItemsPaginated(c.Request.Context(), anchorID, page, limit)
-	if err != nil {
-		response.InternalServerError(c, "Failed to fetch items", "DATABASE_ERROR")
-		return
+	if items == nil {
+		items = []Item{}
 	}
 
 	response.Success(c, gin.H{
@@ -475,22 +445,18 @@ func (h *Handler) ListAnchorItems(c *gin.Context) {
 
 // AddItem adds a new item to an anchor
 func (h *Handler) AddItem(c *gin.Context) {
-	anchorIDStr := c.Param("id")
-	anchorID, err := primitive.ObjectIDFromHex(anchorIDStr)
-	if err != nil {
-		response.BadRequest(c, "Invalid anchor ID", "INVALID_ID")
+	user, ok := requireUser(c, "add items")
+	if !ok {
 		return
 	}
-
 	var req AddItemRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "Invalid request format", "INVALID_JSON")
+	if !bind.JSON(c, &req) {
 		return
 	}
 
 	// Media items must go through the upload endpoint
 	if req.Type == ItemTypeImage || req.Type == ItemTypeAudio || req.Type == ItemTypeFile {
-		response.BadRequest(c, "Use POST /anchors/{id}/items/upload for image, audio and file items", "USE_UPLOAD_ENDPOINT")
+		response.BadRequest(c, "Images, audio and files are added by uploading them to POST /anchors/{id}/items/upload", "USE_UPLOAD_ENDPOINT")
 		return
 	}
 	if err := ValidateAddItemRequest(&req); err != nil {
@@ -498,76 +464,60 @@ func (h *Handler) AddItem(c *gin.Context) {
 		return
 	}
 
-	val, exists := c.Get("user")
-	if !exists {
-		response.Unauthorized(c, "Authentication required", "AUTH_FAILED")
-		return
-	}
-	user, ok := val.(*auth.User)
+	anchor, ok := h.loadOwnedAnchor(c, user)
 	if !ok {
-		response.InternalServerError(c, "User context error", "INTERNAL_ERROR")
 		return
 	}
+	ctx := c.Request.Context()
 
-	// Verify ownership
-	anchor, err := h.repo.GetAnchorByID(c.Request.Context(), anchorID)
-	if err != nil || anchor.DeletedAt != nil {
-		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
-		return
-	}
-
-	if anchor.UserID != user.ID {
-		response.Forbidden(c, "You do not have permission")
-		return
-	}
-
-	// Get current item count to set position
-	count, err := h.repo.CountAnchorItems(c.Request.Context(), anchorID)
+	count, err := h.repo.CountAnchorItems(ctx, anchor.ID)
 	if err != nil {
-		response.InternalServerError(c, "Database error", "DATABASE_ERROR")
+		log.Printf("anchors: counting items of %s failed: %v", anchor.ID.Hex(), err)
+		response.InternalServerError(c, "We couldn't add this item right now. Please try again", "DATABASE_ERROR")
 		return
 	}
 
-	// Map content based on type
 	var textData *TextData
 	var urlData *URLData
-
-	if req.Type == ItemTypeText && req.Content != nil {
+	if req.Type == ItemTypeText {
 		textData = &TextData{Content: strings.TrimSpace(*req.Content)}
-	} else if req.Type == ItemTypeURL && req.URL != nil {
-		targetURL := strings.TrimSpace(*req.URL)
-		urlData = &URLData{OriginalURL: targetURL}
-
-		// Best effort: fill title/description/favicon/thumbnail from the page.
-		// Failures (timeouts, blocked addresses, non-HTML) keep just the URL.
-		fetchCtx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
-		if meta, err := FetchURLMetadata(fetchCtx, targetURL); err == nil && meta != nil {
-			meta.OriginalURL = targetURL
-			urlData = meta
-		} else if err != nil {
-			log.Printf("URL metadata fetch failed for %s: %v", targetURL, err)
-		}
-		cancel()
+	} else {
+		urlData = fetchLinkPreview(ctx, strings.TrimSpace(*req.URL))
 	}
 
 	item := &Item{
-		AnchorID:  anchorID,
-		Type:      req.Type,
-		Position:  int(count),
-		TextData:  textData,
-		URLData:   urlData,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		AnchorID: anchor.ID,
+		Type:     req.Type,
+		Position: int(count),
+		TextData: textData,
+		URLData:  urlData,
 	}
 
-	if err := h.repo.CreateItem(c.Request.Context(), item); err != nil {
-		response.InternalServerError(c, "Failed to create item", "DATABASE_ERROR")
+	if err := h.repo.CreateItem(ctx, item); err != nil {
+		log.Printf("anchors: creating item in %s failed: %v", anchor.ID.Hex(), err)
+		response.InternalServerError(c, "We couldn't add this item right now. Please try again", "DATABASE_ERROR")
 		return
 	}
 
-	h.afterItemAdded(c.Request.Context(), anchor, item, user.ID)
+	h.afterItemAdded(ctx, anchor, item, user.ID)
 
 	response.Created(c, item)
+}
+
+// fetchLinkPreview fills title/description/favicon/thumbnail from the page (best effort:
+// timeouts, blocked addresses or non-HTML pages keep just the URL)
+func fetchLinkPreview(ctx context.Context, targetURL string) *URLData {
+	fetchCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	meta, err := FetchURLMetadata(fetchCtx, targetURL)
+	if err != nil || meta == nil {
+		if err != nil {
+			log.Printf("URL metadata fetch failed for %s: %v", targetURL, err)
+		}
+		return &URLData{OriginalURL: targetURL}
+	}
+	meta.OriginalURL = targetURL
+	return meta
 }
 
 // afterItemAdded updates anchor bookkeeping (lastItemAddedAt, itemCount, version)
@@ -600,6 +550,36 @@ func (h *Handler) afterItemAdded(ctx context.Context, anchor *Anchor, item *Item
 	}(anchor.ID, anchor.Title)
 }
 
+// maxFilenameLength bounds stored original filenames (characters)
+const maxFilenameLength = 200
+
+// cleanFilename keeps only the base name of an uploaded file (clients may send full paths
+// with / or \), drops control/invisible characters and caps the length.
+func cleanFilename(name, ext string) string {
+	if i := strings.LastIndexAny(name, `/\`); i >= 0 {
+		name = name[i+1:]
+	}
+	name = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, name)
+	name = strings.TrimSpace(name)
+	if r := []rune(name); len(r) > maxFilenameLength {
+		// keep the extension visible when shortening
+		keep := maxFilenameLength - utf8.RuneCountInString(ext)
+		if keep < 1 {
+			keep = maxFilenameLength
+		}
+		name = string(r[:keep]) + ext
+	}
+	if name == "" || name == "." || name == ".." {
+		name = "file" + ext
+	}
+	return name
+}
+
 // UploadItem uploads an image, audio or document file as an anchor item.
 // The item type is chosen from the file extension:
 //   - image (.jpg .jpeg .png .gif .webp, max 10MB)
@@ -619,38 +599,18 @@ func (h *Handler) afterItemAdded(ctx context.Context, anchor *Anchor, item *Item
 // @Failure 404 {object} response.APIResponse
 // @Router /anchors/{id}/items/upload [post]
 func (h *Handler) UploadItem(c *gin.Context) {
-	anchorIDStr := c.Param("id")
-	anchorID, err := primitive.ObjectIDFromHex(anchorIDStr)
-	if err != nil {
-		response.BadRequest(c, "Invalid anchor ID", "INVALID_ID")
-		return
-	}
-
-	if h.cloudinary == nil {
-		response.ServiceUnavailable(c, "File uploads are not configured", "UPLOADS_UNAVAILABLE")
-		return
-	}
-
-	// Verify ownership first
-	val, exists := c.Get("user")
-	if !exists {
-		response.Unauthorized(c, "Authentication required", "AUTH_FAILED")
-		return
-	}
-	user, ok := val.(*auth.User)
+	user, ok := requireUser(c, "upload files")
 	if !ok {
-		response.InternalServerError(c, "User context error", "INTERNAL_ERROR")
+		return
+	}
+	if h.cloudinary == nil {
+		response.ServiceUnavailable(c, "File uploads aren't available right now", "UPLOADS_UNAVAILABLE")
 		return
 	}
 
-	anchor, err := h.repo.GetAnchorByID(c.Request.Context(), anchorID)
-	if err != nil || anchor.DeletedAt != nil {
-		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
-		return
-	}
-
-	if anchor.UserID != user.ID {
-		response.Forbidden(c, "You do not have permission")
+	// Check ownership before reading a possibly large body
+	anchor, ok := h.loadOwnedAnchor(c, user)
+	if !ok {
 		return
 	}
 
@@ -661,10 +621,10 @@ func (h *Handler) UploadItem(c *gin.Context) {
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			response.Error(c, http.StatusRequestEntityTooLarge, "File is too large (max 50MB)", "FILE_TOO_LARGE")
+			response.Error(c, http.StatusRequestEntityTooLarge, "This file is too large. The maximum is 10MB for images, 25MB for audio and 50MB for documents", "FILE_TOO_LARGE")
 			return
 		}
-		response.BadRequest(c, "File is required (multipart field 'file', max 50MB)", "MISSING_FILE")
+		response.BadRequest(c, `Please attach the file as multipart form field "file"`, "MISSING_FILE")
 		return
 	}
 
@@ -688,26 +648,30 @@ func (h *Handler) UploadItem(c *gin.Context) {
 
 	fileContent, err := file.Open()
 	if err != nil {
-		response.InternalServerError(c, "Failed to open file", "FILE_ERROR")
+		log.Printf("anchors: opening upload failed: %v", err)
+		response.InternalServerError(c, "We couldn't read the uploaded file. Please try again", "FILE_ERROR")
 		return
 	}
 	defer fileContent.Close()
 
-	ctx := c.Request.Context()
-	now := time.Now()
-	item := &Item{
-		AnchorID:  anchorID,
-		Type:      itemType,
-		CreatedAt: now,
-		UpdatedAt: now,
+	// Documents are stored as-is, so check they really are what the extension says
+	if itemType == ItemTypeFile {
+		if err := cloudinary.CheckDocumentContent(fileContent, file.Filename); err != nil {
+			response.BadRequest(c, err.Error(), "INVALID_FILE")
+			return
+		}
 	}
+
+	ctx := c.Request.Context()
+	filename := cleanFilename(file.Filename, ext)
+	item := &Item{AnchorID: anchor.ID, Type: itemType}
 
 	switch itemType {
 	case ItemTypeImage:
-		result, err := h.cloudinary.UploadImage(ctx, fileContent, file.Filename)
+		result, err := h.cloudinary.UploadImage(ctx, fileContent, filename)
 		if err != nil {
 			log.Printf("Image upload failed: %v", err)
-			response.InternalServerError(c, "Failed to upload image", "UPLOAD_FAILED")
+			response.InternalServerError(c, "We couldn't upload this image. Please check it's a valid image file and try again", "UPLOAD_FAILED")
 			return
 		}
 		item.ImageData = &ImageData{
@@ -718,10 +682,10 @@ func (h *Handler) UploadItem(c *gin.Context) {
 			FileSize:      result.FileSize,
 		}
 	case ItemTypeAudio:
-		result, err := h.cloudinary.UploadAudio(ctx, fileContent, file.Filename)
+		result, err := h.cloudinary.UploadAudio(ctx, fileContent, filename)
 		if err != nil {
 			log.Printf("Audio upload failed: %v", err)
-			response.InternalServerError(c, "Failed to upload audio", "UPLOAD_FAILED")
+			response.InternalServerError(c, "We couldn't upload this audio. Please check it's a valid audio file and try again", "UPLOAD_FAILED")
 			return
 		}
 		item.AudioData = &AudioData{
@@ -731,24 +695,26 @@ func (h *Handler) UploadItem(c *gin.Context) {
 			FileSize:      result.FileSize,
 		}
 	default:
-		result, err := h.cloudinary.UploadFile(ctx, fileContent, file.Filename)
+		result, err := h.cloudinary.UploadFile(ctx, fileContent, filename)
 		if err != nil {
 			log.Printf("File upload failed: %v", err)
-			response.InternalServerError(c, "Failed to upload file", "UPLOAD_FAILED")
+			response.InternalServerError(c, "We couldn't upload this file. Please try again", "UPLOAD_FAILED")
 			return
 		}
 		item.FileData = &FileData{
 			CloudinaryURL: result.URL,
 			PublicID:      result.PublicID,
-			Filename:      file.Filename,
+			Filename:      filename,
 			FileType:      strings.TrimPrefix(ext, "."),
 			FileSize:      result.FileSize,
 		}
 	}
 
-	count, err := h.repo.CountAnchorItems(ctx, anchorID)
+	count, err := h.repo.CountAnchorItems(ctx, anchor.ID)
 	if err != nil {
-		response.InternalServerError(c, "Database error", "DATABASE_ERROR")
+		h.deleteItemAsset(ctx, item)
+		log.Printf("anchors: counting items of %s failed: %v", anchor.ID.Hex(), err)
+		response.InternalServerError(c, "We couldn't add this item right now. Please try again", "DATABASE_ERROR")
 		return
 	}
 	item.Position = int(count)
@@ -756,7 +722,8 @@ func (h *Handler) UploadItem(c *gin.Context) {
 	if err := h.repo.CreateItem(ctx, item); err != nil {
 		// Don't leave an orphaned asset behind
 		h.deleteItemAsset(ctx, item)
-		response.InternalServerError(c, "Failed to create item", "DATABASE_ERROR")
+		log.Printf("anchors: creating item in %s failed: %v", anchor.ID.Hex(), err)
+		response.InternalServerError(c, "We couldn't add this item right now. Please try again", "DATABASE_ERROR")
 		return
 	}
 
@@ -770,26 +737,17 @@ func (h *Handler) deleteItemAsset(ctx context.Context, item *Item) {
 	if h.cloudinary == nil {
 		return
 	}
-	var publicID, resourceType string
+	var publicID, resourceType, url string
 	switch {
 	case item.ImageData != nil:
-		publicID, resourceType = item.ImageData.PublicID, "image"
+		publicID, resourceType, url = item.ImageData.PublicID, "image", item.ImageData.CloudinaryURL
 	case item.AudioData != nil:
-		publicID, resourceType = item.AudioData.PublicID, "video" // Cloudinary stores audio as "video"
+		publicID, resourceType, url = item.AudioData.PublicID, "video", item.AudioData.CloudinaryURL // Cloudinary stores audio as "video"
 	case item.FileData != nil:
-		publicID, resourceType = item.FileData.PublicID, "raw"
+		publicID, resourceType, url = item.FileData.PublicID, "raw", item.FileData.CloudinaryURL
 	}
 	if publicID == "" {
 		return
-	}
-	var url string
-	switch {
-	case item.ImageData != nil:
-		url = item.ImageData.CloudinaryURL
-	case item.AudioData != nil:
-		url = item.AudioData.CloudinaryURL
-	case item.FileData != nil:
-		url = item.FileData.CloudinaryURL
 	}
 	if h.repo.IsAssetShared(ctx, item.AnchorID, url) {
 		return
@@ -825,57 +783,29 @@ func containsString(list []string, v string) bool {
 // @Failure 404 {object} response.APIResponse
 // @Router /anchors/{id}/items/{itemId} [patch]
 func (h *Handler) UpdateItem(c *gin.Context) {
-	anchorID, err := primitive.ObjectIDFromHex(c.Param("id"))
-	if err != nil {
-		response.BadRequest(c, "Invalid anchor ID", "INVALID_ID")
-		return
-	}
-	itemID, err := primitive.ObjectIDFromHex(c.Param("itemId"))
-	if err != nil {
-		response.BadRequest(c, "Invalid item ID", "INVALID_ID")
-		return
-	}
-
-	var req UpdateItemRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "Invalid request format", "INVALID_JSON")
-		return
-	}
-
-	val, exists := c.Get("user")
-	if !exists {
-		response.Unauthorized(c, "Authentication required", "AUTH_FAILED")
-		return
-	}
-	user, ok := val.(*auth.User)
+	user, ok := requireUser(c, "edit items")
 	if !ok {
-		response.InternalServerError(c, "User context error", "INTERNAL_ERROR")
 		return
 	}
-
+	anchor, ok := h.loadOwnedAnchor(c, user)
+	if !ok {
+		return
+	}
+	item, ok := h.loadItemOf(c, anchor.ID)
+	if !ok {
+		return
+	}
+	var req UpdateItemRequest
+	if !bind.JSON(c, &req) {
+		return
+	}
 	ctx := c.Request.Context()
-
-	anchor, err := h.repo.GetAnchorByID(ctx, anchorID)
-	if err != nil || anchor.DeletedAt != nil {
-		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
-		return
-	}
-	if anchor.UserID != user.ID {
-		response.Forbidden(c, "You do not have permission")
-		return
-	}
-
-	item, err := h.repo.GetItemByID(ctx, itemID)
-	if err != nil || item.AnchorID != anchorID {
-		response.NotFound(c, "Item not found", "ITEM_NOT_FOUND")
-		return
-	}
 
 	set := bson.M{}
 	switch item.Type {
 	case ItemTypeText:
 		if req.Content == nil {
-			response.BadRequest(c, "content is required for text items", "VALIDATION_FAILED")
+			response.BadRequest(c, `Please send the new text as "content"`, "VALIDATION_FAILED")
 			return
 		}
 		if err := ValidateTextContent(*req.Content); err != nil {
@@ -885,7 +815,7 @@ func (h *Handler) UpdateItem(c *gin.Context) {
 		set["textData"] = TextData{Content: strings.TrimSpace(*req.Content)}
 	case ItemTypeURL:
 		if req.URL == nil {
-			response.BadRequest(c, "url is required for URL items", "VALIDATION_FAILED")
+			response.BadRequest(c, `Please send the new link as "url"`, "VALIDATION_FAILED")
 			return
 		}
 		targetURL := strings.TrimSpace(*req.URL)
@@ -893,29 +823,21 @@ func (h *Handler) UpdateItem(c *gin.Context) {
 			response.BadRequest(c, err.Error(), "VALIDATION_FAILED")
 			return
 		}
-		urlData := &URLData{OriginalURL: targetURL}
-		fetchCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
-		if meta, err := FetchURLMetadata(fetchCtx, targetURL); err == nil && meta != nil {
-			meta.OriginalURL = targetURL
-			urlData = meta
-		} else if err != nil {
-			log.Printf("URL metadata fetch failed for %s: %v", targetURL, err)
-		}
-		cancel()
-		set["urlData"] = urlData
+		set["urlData"] = fetchLinkPreview(ctx, targetURL)
 	default:
-		response.BadRequest(c, "Only text and URL items can be edited; delete and re-upload media items", "ITEM_NOT_EDITABLE")
+		response.BadRequest(c, "Images, audio and files can't be edited. Delete this item and upload the new file instead", "ITEM_NOT_EDITABLE")
 		return
 	}
 
-	updated, err := h.repo.UpdateItem(ctx, itemID, set)
+	updated, err := h.repo.UpdateItem(ctx, item.ID, set)
 	if err != nil {
-		response.InternalServerError(c, "Failed to update item", "DATABASE_ERROR")
+		log.Printf("anchors: updating item %s failed: %v", item.ID.Hex(), err)
+		response.InternalServerError(c, "We couldn't save this item right now. Please try again", "DATABASE_ERROR")
 		return
 	}
 
-	if err := h.repo.UpdateAnchor(ctx, anchorID, map[string]interface{}{"updatedAt": time.Now()}); err != nil {
-		log.Printf("Failed to touch anchor %s after item edit: %v", anchorID.Hex(), err)
+	if err := h.repo.UpdateAnchor(ctx, anchor.ID, map[string]interface{}{"updatedAt": time.Now()}); err != nil {
+		log.Printf("Failed to touch anchor %s after item edit: %v", anchor.ID.Hex(), err)
 	}
 
 	response.Success(c, updated)
@@ -923,65 +845,36 @@ func (h *Handler) UpdateItem(c *gin.Context) {
 
 // DeleteItem deletes an item
 func (h *Handler) DeleteItem(c *gin.Context) {
-	anchorIDStr := c.Param("id")
-	itemIDStr := c.Param("itemId")
-
-	anchorID, err := primitive.ObjectIDFromHex(anchorIDStr)
-	if err != nil {
-		response.BadRequest(c, "Invalid anchor ID", "INVALID_ID")
-		return
-	}
-	itemID, err := primitive.ObjectIDFromHex(itemIDStr)
-	if err != nil {
-		response.BadRequest(c, "Invalid item ID", "INVALID_ID")
-		return
-	}
-
-	val, exists := c.Get("user")
-	if !exists {
-		response.Unauthorized(c, "Authentication required", "AUTH_FAILED")
-		return
-	}
-	user, ok := val.(*auth.User)
+	user, ok := requireUser(c, "delete items")
 	if !ok {
-		response.InternalServerError(c, "User context error", "INTERNAL_ERROR")
 		return
 	}
+	anchor, ok := h.loadOwnedAnchor(c, user)
+	if !ok {
+		return
+	}
+	item, ok := h.loadItemOf(c, anchor.ID)
+	if !ok {
+		return
+	}
+	ctx := c.Request.Context()
 
-	// Verify ownership of anchor
-	anchor, err := h.repo.GetAnchorByID(c.Request.Context(), anchorID)
-	if err != nil || anchor.DeletedAt != nil {
-		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
-		return
-	}
-
-	if anchor.UserID != user.ID {
-		response.Forbidden(c, "You do not have permission")
-		return
-	}
-
-	// Verify item belongs to anchor
-	item, err := h.repo.GetItemByID(c.Request.Context(), itemID)
-	if err != nil {
-		response.NotFound(c, "Item not found", "ITEM_NOT_FOUND")
-		return
-	}
-	if item.AnchorID != anchorID {
-		response.BadRequest(c, "Item does not belong to this anchor", "INVALID_RELATION")
-		return
-	}
-
-	if err := h.repo.DeleteItem(c.Request.Context(), itemID); err != nil {
-		response.InternalServerError(c, "Failed to delete item", "DATABASE_ERROR")
+	if err := h.repo.DeleteItem(ctx, item.ID); err != nil {
+		if errors.Is(err, ErrItemNotFound) {
+			response.NotFound(c, "This item has already been deleted", "ITEM_NOT_FOUND")
+			return
+		}
+		log.Printf("anchors: deleting item %s failed: %v", item.ID.Hex(), err)
+		response.InternalServerError(c, "We couldn't delete this item right now. Please try again", "DATABASE_ERROR")
 		return
 	}
 
 	// Remove the uploaded file too (unless a clone still points at it)
-	h.deleteItemAsset(c.Request.Context(), item)
+	h.deleteItemAsset(ctx, item)
 
 	// Close the gap in positions and set itemCount to the real number of items
-	if err := h.repo.RenumberItems(c.Request.Context(), anchorID); err != nil {
-		log.Printf("Failed to renumber items of anchor %s: %v", anchorID.Hex(), err)
+	if err := h.repo.RenumberItems(ctx, anchor.ID); err != nil {
+		log.Printf("Failed to renumber items of anchor %s: %v", anchor.ID.Hex(), err)
 	}
 
 	response.Success(c, "Item deleted")
@@ -989,56 +882,47 @@ func (h *Handler) DeleteItem(c *gin.Context) {
 
 // ReorderItems updates the order of items
 func (h *Handler) ReorderItems(c *gin.Context) {
-	anchorIDStr := c.Param("id")
-	anchorID, err := primitive.ObjectIDFromHex(anchorIDStr)
-	if err != nil {
-		response.BadRequest(c, "Invalid anchor ID", "INVALID_ID")
-		return
-	}
-
-	var req struct {
-		ItemIDs []string `json:"itemIds" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "Invalid request", "INVALID_JSON")
-		return
-	}
-
-	val, exists := c.Get("user")
-	if !exists {
-		response.Unauthorized(c, "Authentication required", "AUTH_FAILED")
-		return
-	}
-	user, ok := val.(*auth.User)
+	user, ok := requireUser(c, "reorder items")
 	if !ok {
-		response.InternalServerError(c, "User context error", "INTERNAL_ERROR")
 		return
 	}
-
-	anchor, err := h.repo.GetAnchorByID(c.Request.Context(), anchorID)
-	if err != nil || anchor.DeletedAt != nil {
-		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
+	var req ReorderItemsRequest
+	if !bind.JSON(c, &req) {
 		return
 	}
-
-	if anchor.UserID != user.ID {
-		response.Forbidden(c, "You do not have permission")
+	anchor, ok := h.loadOwnedAnchor(c, user)
+	if !ok {
 		return
 	}
+	ctx := c.Request.Context()
 
-	// Must list every item of the anchor exactly once
-	count, err := h.repo.CountAnchorItems(c.Request.Context(), anchorID)
+	// Check the whole list before writing anything: a bad ID halfway through must not leave
+	// the anchor half reordered
+	existing, err := h.repo.ItemIDs(ctx, anchor.ID)
 	if err != nil {
-		response.InternalServerError(c, "Database error", "DATABASE_ERROR")
+		log.Printf("anchors: loading item IDs of %s failed: %v", anchor.ID.Hex(), err)
+		response.InternalServerError(c, "We couldn't reorder the items right now. Please try again", "DATABASE_ERROR")
 		return
 	}
-	if err := ValidateReorderItemsRequest(&ReorderItemsRequest{ItemIDs: req.ItemIDs}, int(count)); err != nil {
+	if err := ValidateReorderItemsRequest(&req, len(existing)); err != nil {
 		response.BadRequest(c, err.Error(), "VALIDATION_FAILED")
 		return
 	}
+	for _, raw := range req.ItemIDs {
+		id, err := primitive.ObjectIDFromHex(raw)
+		if err != nil {
+			response.BadRequest(c, fmt.Sprintf(`"%s" isn't a valid item ID`, raw), "VALIDATION_FAILED")
+			return
+		}
+		if !existing[id] {
+			response.BadRequest(c, fmt.Sprintf(`Item "%s" isn't in this anchor`, raw), "VALIDATION_FAILED")
+			return
+		}
+	}
 
-	if err := h.repo.ReorderItems(c.Request.Context(), anchorIDStr, req.ItemIDs); err != nil {
-		response.InternalServerError(c, "Failed to reorder items", "DATABASE_ERROR")
+	if err := h.repo.ReorderItems(ctx, anchor.ID.Hex(), req.ItemIDs); err != nil {
+		log.Printf("anchors: reordering %s failed: %v", anchor.ID.Hex(), err)
+		response.Error(c, http.StatusConflict, "The items changed while you were reordering them. Please reload and try again", "ITEMS_CHANGED")
 		return
 	}
 
@@ -1061,63 +945,57 @@ func (h *Handler) ReorderItems(c *gin.Context) {
 // @Failure 409 {object} response.APIResponse
 // @Router /anchors/{id}/clone [post]
 func (h *Handler) CloneAnchor(c *gin.Context) {
-	anchorID, err := primitive.ObjectIDFromHex(c.Param("id"))
-	if err != nil {
-		response.BadRequest(c, "Invalid anchor ID", "INVALID_ID")
-		return
-	}
-
-	val, exists := c.Get("user")
-	if !exists {
-		response.Unauthorized(c, "Authentication required", "AUTH_FAILED")
-		return
-	}
-	user, ok := val.(*auth.User)
+	user, ok := requireUser(c, "clone anchors")
 	if !ok {
-		response.InternalServerError(c, "User context error", "INTERNAL_ERROR")
 		return
 	}
 
 	// Body is optional
 	var req CloneAnchorRequest
 	if c.Request.ContentLength > 0 {
-		if err := c.ShouldBindJSON(&req); err != nil {
-			response.BadRequest(c, "Invalid request format", "INVALID_JSON")
+		if !bind.JSON(c, &req) {
 			return
 		}
 	}
 
-	ctx := c.Request.Context()
-
-	original, err := h.repo.GetAnchorByID(ctx, anchorID)
-	// Private anchors are reported as not found so their existence isn't revealed
-	if err != nil || original.DeletedAt != nil ||
-		(original.Visibility == VisibilityPrivate && original.UserID != user.ID) {
-		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
+	original, ok := h.loadAnchor(c)
+	if !ok {
 		return
 	}
+	ctx := c.Request.Context()
 
+	// Private anchors are reported as not found so their existence isn't revealed
+	if original.DeletedAt != nil || (original.Visibility == VisibilityPrivate && original.UserID != user.ID) {
+		response.NotFound(c, msgAnchorNotFound, "ANCHOR_NOT_FOUND")
+		return
+	}
 	if original.UserID == user.ID {
-		response.BadRequest(c, "You cannot clone your own anchor", "CANNOT_CLONE_OWN")
+		response.BadRequest(c, "This is your own anchor, so there's nothing to clone. You can edit it directly", "CANNOT_CLONE_OWN")
 		return
 	}
 
 	// Blocked users (either direction) can't clone each other's anchors
 	if blocked, err := h.authRepo.IsBlockedBetween(ctx, user, original.UserID); err != nil {
-		response.InternalServerError(c, "Database error", "DATABASE_ERROR")
+		log.Printf("anchors: block check failed: %v", err)
+		response.InternalServerError(c, msgTryAgain, "DATABASE_ERROR")
 		return
 	} else if blocked {
-		response.Forbidden(c, "You can't interact with this user", "USER_BLOCKED")
+		if user.HasBlocked(original.UserID) {
+			response.Forbidden(c, "You've blocked the owner of this anchor. Unblock them first if you want to clone it", "USER_BLOCKED")
+		} else {
+			response.NotFound(c, msgAnchorNotFound, "ANCHOR_NOT_FOUND")
+		}
 		return
 	}
 
-	existing, err := h.repo.FindUserCloneOf(ctx, user.ID, anchorID)
+	existing, err := h.repo.FindUserCloneOf(ctx, user.ID, original.ID)
 	if err != nil {
-		response.InternalServerError(c, "Database error", "DATABASE_ERROR")
+		log.Printf("anchors: clone lookup failed: %v", err)
+		response.InternalServerError(c, msgTryAgain, "DATABASE_ERROR")
 		return
 	}
 	if existing != nil {
-		response.Respond(c, http.StatusConflict, false, "You have already cloned this anchor",
+		response.Respond(c, http.StatusConflict, false, "You've already cloned this anchor. Open your copy instead",
 			gin.H{"anchorId": existing.ID}, "ALREADY_CLONED")
 		return
 	}
@@ -1140,13 +1018,14 @@ func (h *Handler) CloneAnchor(c *gin.Context) {
 		visibility = *req.Visibility
 	}
 	if original.Visibility == VisibilityUnlisted && visibility == VisibilityPublic {
-		response.BadRequest(c, "Clones of unlisted anchors can't be public", "VISIBILITY_NOT_ALLOWED")
+		response.BadRequest(c, "This anchor is shared by link only, so your copy can be unlisted or private but not public", "VISIBILITY_NOT_ALLOWED")
 		return
 	}
 
-	items, err := h.repo.GetAnchorItems(ctx, anchorID)
+	items, err := h.repo.GetAnchorItems(ctx, original.ID)
 	if err != nil {
-		response.InternalServerError(c, "Failed to read anchor items", "DATABASE_ERROR")
+		log.Printf("anchors: reading items of %s failed: %v", original.ID.Hex(), err)
+		response.InternalServerError(c, "We couldn't clone this anchor right now. Please try again", "DATABASE_ERROR")
 		return
 	}
 
@@ -1164,12 +1043,10 @@ func (h *Handler) CloneAnchor(c *gin.Context) {
 		ItemCount:          len(items),
 		Version:            1,
 	}
-	if clone.Tags == nil {
-		clone.Tags = []string{}
-	}
 
 	if err := h.repo.CreateAnchor(ctx, clone); err != nil {
-		response.InternalServerError(c, "Failed to clone anchor", "DATABASE_ERROR")
+		log.Printf("anchors: creating clone failed: %v", err)
+		response.InternalServerError(c, "We couldn't clone this anchor right now. Please try again", "DATABASE_ERROR")
 		return
 	}
 
@@ -1180,7 +1057,7 @@ func (h *Handler) CloneAnchor(c *gin.Context) {
 		if delErr := h.repo.DeleteAnchor(ctx, clone.ID); delErr != nil {
 			log.Printf("Failed to roll back duplicate clone %s: %v", clone.ID.Hex(), delErr)
 		}
-		response.Respond(c, http.StatusConflict, false, "You have already cloned this anchor",
+		response.Respond(c, http.StatusConflict, false, "You've already cloned this anchor. Open your copy instead",
 			gin.H{"anchorId": cloneIDs[0]}, "ALREADY_CLONED")
 		return
 	}
@@ -1219,7 +1096,8 @@ func (h *Handler) CloneAnchor(c *gin.Context) {
 			if delErr := h.repo.DeleteAnchor(ctx, clone.ID); delErr != nil {
 				log.Printf("Failed to roll back clone %s: %v", clone.ID.Hex(), delErr)
 			}
-			response.InternalServerError(c, "Failed to copy anchor items", "DATABASE_ERROR")
+			log.Printf("anchors: copying items into clone failed: %v", err)
+			response.InternalServerError(c, "We couldn't copy this anchor's items. Please try again", "DATABASE_ERROR")
 			return
 		}
 	}
@@ -1259,46 +1137,44 @@ func (h *Handler) CloneAnchor(c *gin.Context) {
 // @Failure 404 {object} response.APIResponse
 // @Router /anchors/{id}/clones [get]
 func (h *Handler) GetAnchorClones(c *gin.Context) {
-	anchorIDStr := c.Param("id")
-	anchorID, err := primitive.ObjectIDFromHex(anchorIDStr)
-	if err != nil {
-		response.BadRequest(c, "Invalid anchor ID", "INVALID_ID")
+	anchor, ok := h.loadViewableAnchor(c)
+	if !ok {
 		return
 	}
-
 	page, limit := pageParams(c, 20, 50)
+	ctx := c.Request.Context()
 
-	// Check anchor exists
-	anchor, err := h.repo.GetAnchorByID(c.Request.Context(), anchorID)
+	// Clones by people in a block relationship with the viewer are left out
+	hidden, err := h.authRepo.HiddenUserIDs(ctx, currentUser(c))
 	if err != nil {
-		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
+		log.Printf("anchors: loading blocks failed: %v", err)
+		response.InternalServerError(c, msgTryAgain, "DATABASE_ERROR")
 		return
 	}
 
-	if !ensureAccess(c, anchor) {
-		return
-	}
-
-	clones, total, err := h.repo.GetAnchorClones(c.Request.Context(), anchorID, page, limit)
+	clones, total, err := h.repo.GetAnchorClones(ctx, anchor.ID, hidden, page, limit)
 	if err != nil {
-		response.InternalServerError(c, "Failed to fetch clones", "DATABASE_ERROR")
+		log.Printf("anchors: listing clones of %s failed: %v", anchor.ID.Hex(), err)
+		response.InternalServerError(c, "We couldn't load the copies of this anchor right now. Please try again", "DATABASE_ERROR")
 		return
 	}
 
-	// For clones, we might want to show who cloned it (UserID)
-	// Collect user IDs
 	userIDs := make([]primitive.ObjectID, len(clones))
 	for i, clone := range clones {
 		userIDs[i] = clone.UserID
 	}
-
-	usersList, _ := h.authRepo.GetUsersByIDs(c.Request.Context(), userIDs)
+	usersList, err := h.authRepo.GetUsersByIDs(ctx, userIDs)
+	if err != nil {
+		log.Printf("anchors: loading cloners failed: %v", err)
+		response.InternalServerError(c, "We couldn't load the copies of this anchor right now. Please try again", "DATABASE_ERROR")
+		return
+	}
 	usersMap := make(map[primitive.ObjectID]*auth.User)
 	for i := range usersList {
 		usersMap[usersList[i].ID] = &usersList[i]
 	}
 
-	items := make([]gin.H, 0)
+	items := make([]gin.H, 0, len(clones))
 	for _, clone := range clones {
 		var clonerInfo gin.H
 		if user, ok := usersMap[clone.UserID]; ok {
@@ -1309,7 +1185,6 @@ func (h *Handler) GetAnchorClones(c *gin.Context) {
 				"profilePictureUrl": user.ProfilePictureURL,
 			}
 		}
-
 		items = append(items, gin.H{
 			"id":        clone.ID,
 			"title":     clone.Title,
@@ -1319,7 +1194,6 @@ func (h *Handler) GetAnchorClones(c *gin.Context) {
 	}
 
 	totalPages := int(math.Ceil(float64(total) / float64(limit)))
-
 	response.Success(c, gin.H{
 		"data": items,
 		"pagination": gin.H{
@@ -1337,56 +1211,46 @@ func (h *Handler) GetAnchorClones(c *gin.Context) {
 // @Params id path string true "Anchor ID"
 // @Router /anchors/{id}/pin [patch]
 func (h *Handler) TogglePin(c *gin.Context) {
-	anchorIDStr := c.Param("id")
-	anchorID, err := primitive.ObjectIDFromHex(anchorIDStr)
-	if err != nil {
-		response.BadRequest(c, "Invalid anchor ID", "INVALID_ID")
-		return
-	}
-
-	val, exists := c.Get("user")
-	if !exists {
-		response.Unauthorized(c, "Authentication required", "AUTH_FAILED")
-		return
-	}
-	user, ok := val.(*auth.User)
+	user, ok := requireUser(c, "pin anchors")
 	if !ok {
-		response.InternalServerError(c, "User context error", "INTERNAL_ERROR")
 		return
 	}
-
-	anchor, err := h.repo.GetAnchorByID(c.Request.Context(), anchorID)
-	if err != nil || anchor.DeletedAt != nil {
-		response.NotFound(c, "Anchor not found", "ANCHOR_NOT_FOUND")
+	anchor, ok := h.loadOwnedAnchor(c, user)
+	if !ok {
 		return
 	}
-
-	if anchor.UserID != user.ID {
-		response.Forbidden(c, "You do not have permission")
-		return
-	}
-
-	// Check limit
-	if !anchor.IsPinned {
-		count, err := h.repo.CountPinnedAnchors(c.Request.Context(), user.ID)
-		if err != nil {
-			response.InternalServerError(c, "Database error", "DATABASE_ERROR")
-			return
-		}
-		if count >= 3 {
-			response.BadRequest(c, "You can only pin up to 3 anchors", "LIMIT_REACHED")
-			return
-		}
-	}
+	ctx := c.Request.Context()
+	pinFailed := "We couldn't change the pin right now. Please try again"
 
 	newStatus := !anchor.IsPinned
-
-	err = h.repo.UpdateAnchor(c.Request.Context(), anchorID, map[string]interface{}{
-		"$set": map[string]interface{}{"isPinned": newStatus},
-	})
+	// Atomic flip from the state we read: a double tap can't toggle twice
+	changed, err := h.repo.SetPinned(ctx, anchor.ID, anchor.IsPinned, newStatus)
 	if err != nil {
-		response.InternalServerError(c, "Failed to update pin status", "DATABASE_ERROR")
+		log.Printf("anchors: pin %s failed: %v", anchor.ID.Hex(), err)
+		response.InternalServerError(c, pinFailed, "DATABASE_ERROR")
 		return
+	}
+	if !changed {
+		// A concurrent request already changed it; report the current state
+		response.Success(c, gin.H{"isPinned": newStatus})
+		return
+	}
+
+	if newStatus {
+		// Count *after* pinning, so concurrent pins of different anchors can't exceed the limit
+		count, err := h.repo.CountPinnedAnchors(ctx, user.ID)
+		if err != nil || count > maxPinnedAnchors {
+			if _, revertErr := h.repo.SetPinned(ctx, anchor.ID, true, false); revertErr != nil {
+				log.Printf("anchors: reverting pin of %s failed: %v", anchor.ID.Hex(), revertErr)
+			}
+			if err != nil {
+				log.Printf("anchors: counting pins failed: %v", err)
+				response.InternalServerError(c, pinFailed, "DATABASE_ERROR")
+			} else {
+				response.BadRequest(c, fmt.Sprintf("You can pin up to %d anchors. Unpin one first to pin this one", maxPinnedAnchors), "LIMIT_REACHED")
+			}
+			return
+		}
 	}
 
 	response.Success(c, gin.H{"isPinned": newStatus})

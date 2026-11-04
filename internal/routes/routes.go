@@ -16,6 +16,7 @@ import (
 	"github.com/xyz-asif/gotodo/internal/features/likes"
 	"github.com/xyz-asif/gotodo/internal/features/media"
 	"github.com/xyz-asif/gotodo/internal/features/notifications"
+	"github.com/xyz-asif/gotodo/internal/features/push"
 	"github.com/xyz-asif/gotodo/internal/features/safety"
 	"github.com/xyz-asif/gotodo/internal/features/search"
 	"github.com/xyz-asif/gotodo/internal/features/users"
@@ -150,6 +151,7 @@ func SetupRoutes(router *gin.Engine, db *mongo.Database, cfg *config.Config) {
 	comments.RegisterRoutes(api, db, cfg)
 
 	notifications.RegisterRoutes(api, db, cfg, anchorsRepo)
+	push.RegisterRoutes(api, db, cfg) // devices, push settings, and sending pushes for new notifications
 
 	search.RegisterRoutes(api, db, cfg)
 	feed.RegisterRoutes(api, db, cfg)

@@ -12,12 +12,6 @@ import (
 // RegisterRoutes registers the auth routes and initializes dependencies
 // We accept followService and anchorService as interfaces because we can't import those packages due to cycle
 func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Config, followService FollowService, anchorService AnchorService) {
-	// Init Firebase
-	firebaseClient, err := InitFirebase(cfg)
-	if err != nil {
-		log.Fatalf("Failed to initialize Firebase: %v", err)
-	}
-
 	// Initialize Cloudinary service
 	cloudinarySvc, err := cloudinary.NewService(cfg.CloudinaryCloudName, cfg.CloudinaryAPIKey, cfg.CloudinaryAPISecret, "profiles")
 	if err != nil {
@@ -28,7 +22,7 @@ func RegisterRoutes(router *gin.RouterGroup, db *mongo.Database, cfg *config.Con
 	repo := NewRepository(db)
 
 	// Use the passed services
-	handler := NewHandler(repo, firebaseClient, cfg, cloudinarySvc, followService, anchorService)
+	handler := NewHandler(repo, cfg, cloudinarySvc, followService, anchorService)
 	authMiddleware := NewAuthMiddleware(repo, cfg)
 
 	// Auth routes
