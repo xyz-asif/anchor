@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/xyz-asif/gotodo/internal/config"
+	"github.com/xyz-asif/gotodo/internal/pkg/bind"
 	"github.com/xyz-asif/gotodo/internal/pkg/cloudinary"
 	idToken "github.com/xyz-asif/gotodo/internal/pkg/jwt"
 	"github.com/xyz-asif/gotodo/internal/pkg/response"
@@ -418,6 +419,7 @@ func (h *Handler) DevLogin(c *gin.Context) {
 	needsUsername := user.Username == "" || strings.HasPrefix(user.Username, "dev_")
 
 	response.Success(c, LoginResponse{
+		AccessToken:      accessToken,
 		Token:            accessToken,
 		RefreshToken:     refreshToken,
 		User:             user,
@@ -439,26 +441,26 @@ func (h *Handler) DevLogin(c *gin.Context) {
 // @Router /auth/refresh [post]
 func (h *Handler) RefreshToken(c *gin.Context) {
 	var req RefreshTokenRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "Invalid request format", "INVALID_JSON")
+	if !bind.JSON(c, &req) {
 		return
 	}
 
 	// Must be a validly signed, unexpired *refresh* token with a token ID
 	claims, err := idToken.ValidateRefreshToken(req.RefreshToken, h.config.JWTSecret)
 	if err != nil {
-		response.Unauthorized(c, "Invalid refresh token", "INVALID_TOKEN")
+		response.Unauthorized(c, "Your session has expired or the refresh token is invalid. Please sign in again", "INVALID_TOKEN")
 		return
 	}
 
 	// The session must still exist (logout / revoke-all / account deletion remove it)
 	session, err := h.repo.GetRefreshToken(c.Request.Context(), claims.ID)
 	if err != nil {
-		response.InternalServerError(c, "Token lookup failed", "DATABASE_ERROR")
+		log.Printf("auth: refresh session lookup failed: %v", err)
+		response.InternalServerError(c, "We couldn't refresh your session right now. Please try again", "DATABASE_ERROR")
 		return
 	}
 	if session == nil || session.Revoked || session.UserID.Hex() != claims.UserID {
-		response.Unauthorized(c, "Token revoked or not found", "TOKEN_REVOKED")
+		response.Unauthorized(c, "You've been signed out of this session. Please sign in again", "TOKEN_REVOKED")
 		return
 	}
 
@@ -466,17 +468,15 @@ func (h *Handler) RefreshToken(c *gin.Context) {
 	jwtConfig := h.getJWTConfig()
 	newAccessToken, err := idToken.GenerateSessionAccessToken(claims.UserID, claims.Email, claims.ID, jwtConfig)
 	if err != nil {
-		response.InternalServerError(c, "Failed to generate token", "INTERNAL_ERROR")
+		log.Printf("auth: generating refreshed access token failed: %v", err)
+		response.InternalServerError(c, "We couldn't refresh your session right now. Please try again", "INTERNAL_ERROR")
 		return
 	}
 
-	// Return new access token (and keep same refresh token)
+	// New access token; the refresh token stays the same (it isn't rotated)
 	response.Success(c, AuthResponse{
 		AccessToken:  newAccessToken,
 		RefreshToken: req.RefreshToken,
-		// User is optional here, but client might want it?
-		// Let's optimize and not fetch full user unless needed.
-		// Struct has User *User, so it can be nil.
 	})
 }
 

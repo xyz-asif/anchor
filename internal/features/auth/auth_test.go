@@ -311,3 +311,32 @@ func TestConcurrentFirstGoogleLoginCreatesOneAccount(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 1, n)
 }
+
+func TestTokenFieldNamesAreConsistentAndRefreshErrorsAreFriendly(t *testing.T) {
+	e := newTestEnv(t)
+
+	// dev-login returns the access token as "accessToken" (like Google login and refresh),
+	// with "token" kept as an alias for older clients
+	code, out := e.do("POST", "/api/v1/auth/dev-login", "", map[string]string{"email": "names@example.com"})
+	require.Equal(t, 200, code, out)
+	login := out["data"].(map[string]interface{})
+	require.NotEmpty(t, login["accessToken"])
+	require.Equal(t, login["accessToken"], login["token"])
+
+	// refresh uses the same name and leaves out the empty user
+	code, out = e.do("POST", "/api/v1/auth/refresh", "", map[string]string{"refreshToken": login["refreshToken"].(string)})
+	require.Equal(t, 200, code, out)
+	refreshed := out["data"].(map[string]interface{})
+	require.NotEmpty(t, refreshed["accessToken"])
+	_, hasUser := refreshed["user"]
+	require.False(t, hasUser, "refresh must not return \"user\": null")
+
+	// a missing refresh token says which field is wrong instead of "Invalid request format"
+	code, out = e.do("POST", "/api/v1/auth/refresh", "", map[string]string{})
+	require.Equal(t, 400, code, out)
+	require.Contains(t, out["message"], "refreshToken")
+
+	code, out = e.do("POST", "/api/v1/auth/refresh", "", map[string]string{"refreshToken": "garbage"})
+	require.Equal(t, 401, code, out)
+	require.Contains(t, out["message"], "sign in again")
+}

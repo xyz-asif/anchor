@@ -92,15 +92,18 @@ type RefreshTokenSession struct {
 
 // AuthResponse represents the response after successful authentication
 type AuthResponse struct {
-	User         *User  `json:"user"`
+	User         *User  `json:"user,omitempty"` // left out on refresh, which only issues a token
 	AccessToken  string `json:"accessToken"`
 	RefreshToken string `json:"refreshToken"`
 	IsNewUser    bool   `json:"isNewUser,omitempty"` // set on Google login when the account was just created
 }
 
 // LoginResponse represents the response for DevLogin
+// The access token is "accessToken", like Google login and refresh. "token" carries the same
+// value for clients written before the names were unified.
 type LoginResponse struct {
-	Token            string      `json:"token"` // Access Token
+	AccessToken      string      `json:"accessToken"`
+	Token            string      `json:"token"` // Deprecated: same as accessToken
 	RefreshToken     string      `json:"refreshToken"`
 	User             interface{} `json:"user"`
 	IsNewUser        bool        `json:"isNewUser"`

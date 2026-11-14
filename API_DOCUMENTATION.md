@@ -99,7 +99,8 @@
 {
   "success": true,
   "data": {
-    "token": "string (JWT - Access Token)",
+    "accessToken": "string (JWT - Access Token)",
+    "token": "string (deprecated: same value as accessToken)",
     "refreshToken": "string (JWT)",
     "user": { /* User object */ },
     "isNewUser": true,
@@ -129,8 +130,7 @@
   "success": true,
   "data": {
     "accessToken": "string (New Access Token)",
-    "refreshToken": "string (Existing or Rotated Refresh Token)",
-    "user": { /* User object (optional) */ }
+    "refreshToken": "string (the same refresh token you sent; it isn't rotated)"
   }
 }
 ```
